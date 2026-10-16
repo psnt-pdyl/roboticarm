@@ -6,3 +6,4 @@ __pycache__/
 # Training outputs (regenerate with gnn/train.py)
 gnn/ik_gnn.pt
 gnn/train.log
+vision/vision_net.pt

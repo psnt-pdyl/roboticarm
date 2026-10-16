@@ -52,6 +52,8 @@ h1{font-family:var(--f-display);font-weight:700;font-size:clamp(28px,4.2vw,42px)
 .cell{position:relative;aspect-ratio:16/10;max-width:100%;background:var(--panel);border:1px solid var(--line);border-radius:6px;overflow:hidden}
 .cell canvas{width:100%;height:100%;display:block;touch-action:pan-y}
 .cell.follow canvas{touch-action:none;cursor:crosshair}
+.cell.pick canvas{cursor:pointer}
+.cam{width:100%;height:auto;aspect-ratio:4/1;display:block;image-rendering:pixelated;border:1px solid var(--line);border-radius:4px;background:var(--bg)}
 .hint{position:absolute;left:10px;top:10px;right:10px;max-width:46ch;font-size:13px;color:var(--muted);background:var(--panel);border:1px solid var(--line);border-radius:4px;padding:6px 9px;pointer-events:none}
 .trace{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:10px 14px 8px;display:grid;gap:6px}
 .trace header{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:baseline;gap:6px 14px}
@@ -64,8 +66,9 @@ h1{font-family:var(--f-display);font-weight:700;font-size:clamp(28px,4.2vw,42px)
 .sec:first-child{border-top:0}
 .label{font-family:var(--f-display);font-weight:600;font-size:13px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);display:flex;justify-content:space-between;gap:8px}
 .label b{font-weight:600;color:var(--fg);letter-spacing:.06em}
-.seg{display:grid;grid-template-columns:repeat(3,1fr);border:1px solid var(--line);border-radius:5px;overflow:hidden}
-.seg button{font:600 15px/1 var(--f-display);letter-spacing:.08em;text-transform:uppercase;padding:10px 6px;background:transparent;color:var(--fg);border:0;border-left:1px solid var(--line);cursor:pointer}
+.seg{display:grid;grid-auto-flow:column;grid-auto-columns:1fr;border:1px solid var(--line);border-radius:5px;overflow:hidden}
+.seg button{font:600 15px/1 var(--f-display);letter-spacing:.06em;text-transform:uppercase;padding:10px 4px;background:transparent;color:var(--fg);border:0;border-left:1px solid var(--line);cursor:pointer}
+.seg button:disabled{color:var(--muted);cursor:not-allowed}
 .seg button:first-child{border-left:0}
 .seg button[aria-pressed="true"]{background:var(--fg);color:var(--panel)}
 .prog{list-style:none;margin:0;padding:0;font-family:var(--f-mono);font-size:12px;counter-reset:ln}
@@ -130,7 +133,14 @@ button:focus-visible,input:focus-visible{outline:2px solid var(--live);outline-o
           <button id="m-program" aria-pressed="true">Program</button>
           <button id="m-follow" aria-pressed="false">Follow</button>
           <button id="m-jog" aria-pressed="false">Jog</button>
+          <button id="m-vision" aria-pressed="false">Vision</button>
         </div>
+      </div>
+
+      <div class="sec" id="g-vision" hidden>
+        <div class="label">Camera <b id="v-count">0 binned · 0 missed</b></div>
+        <canvas class="cam" id="cam" width="640" height="160" aria-label="The camera image the vision network sees, with the part it found"></canvas>
+        <p class="note" id="v-note">Waiting for the first look.</p>
       </div>
 
       <div class="sec" id="g-program">
@@ -174,7 +184,7 @@ button:focus-visible,input:focus-visible{outline:2px solid var(--live);outline-o
 
       <div class="sec">
         <div class="label">IK solver</div>
-        <div class="seg" role="group" aria-label="Inverse kinematics solver" style="grid-template-columns:repeat(2,1fr)">
+        <div class="seg" role="group" aria-label="Inverse kinematics solver">
           <button id="s-analytic" aria-pressed="true">Closed-form</button>
           <button id="s-gnn" aria-pressed="false">GNN</button>
         </div>
@@ -196,6 +206,9 @@ button:focus-visible,input:focus-visible{outline:2px solid var(--live);outline-o
           <div><dt>Reach</dt><dd id="t-r">OK</dd></div>
           <div><dt>IK error</dt><dd id="t-ike">exact</dd></div>
           <div><dt>IK time</dt><dd id="t-ikt">–</dd></div>
+          <div><dt>GNN calls</dt><dd id="t-ikr">–</dd></div>
+          <div><dt>Vision error</dt><dd id="t-ve">–</dd></div>
+          <div><dt>Vision time</dt><dd id="t-vt">–</dd></div>
         </dl>
       </div>
     </aside>
@@ -203,6 +216,7 @@ button:focus-visible,input:focus-visible{outline:2px solid var(--live);outline-o
 </div>
 
 <script src="ik-gnn-weights.js"></script>
+<script src="vision-weights.js"></script>
 <script>
 (() => {
 const D = Math.PI / 180;
@@ -210,6 +224,8 @@ const L1 = 360, L2 = 300, L3 = 120, SH = { x: 0, y: 160 }, BS = 60, SAFE = 270, 
 const LIM = [[-20, 200], [-160, 160], [-140, 140]].map(r => r.map(v => v * D));
 const VMAX = [110, 130, 200].map(v => v * D), AMAX = [320, 380, 600].map(v => v * D);
 const STN = { A: { x: 300 }, B: { x: 540 } };
+const BIN = { x: -185, w: 120, h: 130, drop: 300 }, PART = { min: 180, max: 590 };   // vision mode
+const PART_COLORS = ['#c0392b', '#2e7d32', '#1565c0', '#6a1b9a', '#ef6c00', '#00838f', '#ad1457', '#5d4037'];
 const GC = (BS / 2 - 12) / 43;               // gripper value at which fingers touch a part
 const halfW = g => 12 + g * 43;              // finger inner half-gap in mm
 const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
@@ -222,8 +238,10 @@ const arm = { q: [100 * D, -110 * D, -80 * D], v: [0, 0, 0], tgt: null, g: 1, gT
 arm.tgt = arm.q.slice();
 let blocks = [], mode = 'program', override = 1, showAngles = true, lastReach = true;
 const follow = { x: 420, y: 200, phi: PHI_DOWN, reach: true };
-const prog = { lines: [], pc: 0, ph: null, running: !reduce, cycles: 0, dir: 'AB', src: 'A', dst: 'B' };
+const prog = { lines: [], pc: 0, ph: null, running: !reduce, cycles: 0, dir: 'AB', src: 'A', dst: 'B', kind: 'xfer' };
 const stacks = { A: [], B: [] };
+const vis = { det: null, err: null, ms: 0, img: null, missed: 0 };
+let partSeq = 0;
 
 // ---------- kinematics ----------
 function fk(q) {
@@ -233,16 +251,21 @@ function fk(q) {
   const t = { x: w.x + L3 * Math.cos(a3), y: w.y + L3 * Math.sin(a3) };
   return { s: SH, e, w, t, a1, a2, a3 };
 }
-// Graph-network IK (weights from gnn/export.py). Same graph as gnn/model.py:
-// shoulder–elbow–wrist–tcp chain plus a goal node linked to every chain node.
-const GNN = (() => {
-  const W = window.IK_GNN; if (!W) return null;
+// Exported weights: one base64 little-endian float32 array per tensor.
+function decodeTensors(tensors) {
   const T = {};
-  for (const [k, v] of Object.entries(W.tensors)) {
+  for (const [k, v] of Object.entries(tensors)) {
     const bin = atob(v.b64), buf = new Uint8Array(bin.length);
     for (let i = 0; i < bin.length; i++) buf[i] = bin.charCodeAt(i);
     T[k] = { s: v.shape, d: new Float32Array(buf.buffer) };
   }
+  return T;
+}
+// Graph-network IK (weights from gnn/export.py). Same graph as gnn/model.py:
+// shoulder–elbow–wrist–tcp chain plus a goal node linked to every chain node.
+const GNN = (() => {
+  const W = window.IK_GNN; if (!W) return null;
+  const T = decodeTensors(W.tensors);
   const H = W.hidden, NS = W.steps, N = 5;
   const src = Array.from(T.src.d, Math.round), dst = Array.from(T.dst.d, Math.round), E = src.length;
   const lin = (name, x) => {
@@ -281,12 +304,102 @@ const GNN = (() => {
         const m = mlp(`node_mlps.${s}`, cat2); for (let i = 0; i < H; i++) h[n][i] += m[i];
       }
     }
-    return [0, 1, 2].map(n => T.q_mid.d[n] + T.q_half.d[n] * mlp('dec', h[n], false)[0]);
+    return [0, 1, 2].map(n => T.q_mid.d[n] + T.q_half.d[n] * Math.tanh(mlp('dec', h[n], false)[0]));
   };
   return { forward, params: Object.entries(T).filter(([k]) => k.endsWith('weight') || k.endsWith('bias')).reduce((a, [, t]) => a + t.d.length, 0), eval: W.eval };
 })();
 
-let solver = 'analytic', ikErr = 0, ikMs = 0, ghostQ = null;
+// Vision (weights and camera definition from vision/export.py). The camera images the strip
+// of floor where parts appear; the network finds the part in that image.
+const VISION = (() => {
+  const V = window.VISION_NET; if (!V) return null;
+  const T = decodeTensors(V.tensors), cam = V.camera, R = cam.radii, COL = cam.colors;
+  const layers = Object.keys(T).filter(k => k.endsWith('.weight')).length;
+  const hi = document.createElement('canvas'); hi.width = cam.w * cam.ss; hi.height = cam.h * cam.ss;
+  const g = hi.getContext('2d', { willReadFrequently: true });
+  const s = hi.width / (cam.x1 - cam.x0);   // samples per mm, equal on both axes
+  const stroke = (a, b, r, col) => {
+    g.strokeStyle = col; g.fillStyle = col; g.lineWidth = 2 * r; g.lineCap = 'round'; g.beginPath();
+    if (a.x === b.x && a.y === b.y) { g.arc(a.x, a.y, r, 0, 7); g.fill(); } else { g.moveTo(a.x, a.y); g.lineTo(b.x, b.y); g.stroke(); }
+  };
+  // Same scene, shapes and drawing order as render() in vision/scene.py. Returns [3][h][w] in 0..1.
+  function capture() {
+    g.setTransform(1, 0, 0, 1, 0, 0); g.fillStyle = COL.bg; g.fillRect(0, 0, hi.width, hi.height);
+    g.setTransform(s, 0, 0, -s, -cam.x0 * s, cam.z1 * s);
+    g.fillStyle = COL.floor; g.fillRect(cam.x0 - 10, cam.z0 - 10, cam.x1 - cam.x0 + 20, 10 - cam.z0);
+    for (const b of blocks) {
+      g.save(); g.translate(b.x, b.y); g.rotate(b.ang); g.fillStyle = b.color || '#687a8c';
+      g.fillRect(-cam.part / 2, -cam.part / 2, cam.part, cam.part); g.restore();
+    }
+    const k = fk(arm.q), u = { x: Math.cos(k.a3), y: Math.sin(k.a3) }, hw = halfW(arm.g);
+    const P = (a, b) => ({ x: k.w.x + u.x * a - u.y * b, y: k.w.y + u.y * a + u.x * b });
+    stroke(k.s, k.e, R.link1, COL.arm); stroke(k.s, k.s, R.shoulder, COL.dark);
+    stroke(k.e, k.w, R.link2, COL.arm); stroke(k.e, k.e, R.elbow, COL.dark);
+    stroke(k.w, P(L3 - 68, 0), R.rod, COL.dark);
+    stroke(P(L3 - 62, -64), P(L3 - 62, 64), R.plate, COL.dark);
+    for (const sgn of [-1, 1]) stroke(P(L3 - 50, sgn * (hw + 6)), P(L3 + 12, sgn * (hw + 6)), R.finger, COL.steel);
+    stroke(k.w, k.w, R.wrist, COL.dark);
+    const d = g.getImageData(0, 0, hi.width, hi.height).data, n = cam.h * cam.w, out = new Float32Array(3 * n);
+    for (let i = 0; i < cam.h; i++) for (let j = 0; j < cam.w; j++) {
+      const o = i * cam.w + j;
+      for (let dy = 0; dy < cam.ss; dy++) for (let dx = 0; dx < cam.ss; dx++) {
+        const p = ((i * cam.ss + dy) * hi.width + j * cam.ss + dx) * 4;
+        out[o] += d[p]; out[n + o] += d[p + 1]; out[2 * n + o] += d[p + 2];
+      }
+    }
+    for (let i = 0; i < out.length; i++) out[i] /= cam.ss * cam.ss * 255;
+    return out;
+  }
+  function conv(x, C, h, w, name, relu) {
+    const wt = T[name + '.weight'].d, bias = T[name + '.bias'].d, O = T[name + '.weight'].s[0], hw = h * w, out = new Float32Array(O * hw);
+    for (let o = 0; o < O; o++) {
+      const ob = o * hw; out.fill(bias[o], ob, ob + hw);
+      for (let c = 0; c < C; c++) for (let ky = 0; ky < 3; ky++) for (let kx = 0; kx < 3; kx++) {
+        const wv = wt[((o * C + c) * 3 + ky) * 3 + kx], dy = ky - 1, dx = kx - 1;
+        for (let i = Math.max(0, -dy); i < Math.min(h, h - dy); i++) {
+          const xr = c * hw + (i + dy) * w + dx, orow = ob + i * w;
+          for (let j = Math.max(0, -dx); j < Math.min(w, w - dx); j++) out[orow + j] += wv * x[xr + j];
+        }
+      }
+      if (relu) for (let i = ob; i < ob + hw; i++) if (out[i] < 0) out[i] = 0;
+    }
+    return out;
+  }
+  function pool(x, C, h, w) {
+    const h2 = h >> 1, w2 = w >> 1, out = new Float32Array(C * h2 * w2);
+    for (let c = 0; c < C; c++) for (let i = 0; i < h2; i++) for (let j = 0; j < w2; j++) {
+      const b = (c * h + 2 * i) * w + 2 * j;
+      out[(c * h2 + i) * w2 + j] = Math.max(x[b], x[b + 1], x[b + w], x[b + w + 1]);
+    }
+    return out;
+  }
+  // Same layers as vision/model.py: convolutions, then a soft-argmax over the final score map.
+  function forward(img) {
+    let x = img.map(v => v - 0.5), C = 3, h = cam.h, w = cam.w;
+    for (let i = 0; i < layers; i++) {
+      x = conv(x, C, h, w, `convs.${i}`, i < layers - 1); C = T[`convs.${i}.weight`].s[0];
+      if (V.pool_after.includes(i)) { x = pool(x, C, h, w); h >>= 1; w >>= 1; }
+    }
+    let m = -Infinity; for (const v of x) if (v > m) m = v;
+    let sum = 0, u = 0, v = 0;
+    for (let i = 0; i < h; i++) for (let j = 0; j < w; j++) {
+      const p = Math.exp(x[i * w + j] - m); sum += p; u += p * (j + 0.5) / w; v += p * (i + 0.5) / h;
+    }
+    return { x: cam.x0 + u / sum * (cam.x1 - cam.x0), z: cam.z1 - v / sum * (cam.z1 - cam.z0) };
+  }
+  return { capture, forward, cam };
+})();
+
+let solver = 'analytic', ikErr = 0, ikMs = 0, ghostQ = null, ikCalls = 0, rateT0 = performance.now();
+// One GNN prediction: joint angles for a reachable gripper pose on the given elbow branch.
+function gnnSolve(gx, gy, phi, elbow) {
+  const t0 = performance.now();
+  const q = GNN.forward([(gx - SH.x) / (L1 + L2 + L3), (gy - SH.y) / (L1 + L2 + L3), Math.sin(phi), Math.cos(phi), elbow]);
+  ikMs += (performance.now() - t0 - ikMs) * 0.1; ikCalls++;
+  for (let i = 0; i < 3; i++) q[i] = clamp(q[i], LIM[i][0], LIM[i][1]);
+  const k = fk(q); ikErr = Math.hypot(k.t.x - gx, k.t.y - gy);
+  return q;
+}
 function ik(tx, ty, phi) {
   const r = ikAnalytic(tx, ty, phi);
   if (solver !== 'gnn' || !GNN) { ghostQ = null; return r; }
@@ -295,11 +408,7 @@ function ik(tx, ty, phi) {
   const d = Math.hypot(wx, wy), dmax = L1 + L2 - 0.5, dmin = Math.abs(L1 - L2) + 0.5;
   if (d > dmax) { wx *= dmax / d; wy *= dmax / d; } else if (d < dmin && d > 1e-6) { wx *= dmin / d; wy *= dmin / d; }
   const gx = SH.x + wx + L3 * Math.cos(phi), gy = SH.y + wy + L3 * Math.sin(phi);
-  const t0 = performance.now();
-  const q = GNN.forward([(gx - SH.x) / (L1 + L2 + L3), (gy - SH.y) / (L1 + L2 + L3), Math.sin(phi), Math.cos(phi), arm.elbow]);
-  ikMs += (performance.now() - t0 - ikMs) * 0.1;
-  for (let i = 0; i < 3; i++) q[i] = clamp(q[i], LIM[i][0], LIM[i][1]);
-  const k = fk(q); ikErr = Math.hypot(k.t.x - gx, k.t.y - gy);
+  const q = gnnSolve(gx, gy, phi, arm.elbow);
   ghostQ = r.q;
   return { q, reach: r.reach };
 }
@@ -320,18 +429,19 @@ function ikAnalytic(tx, ty, phi) {
 }
 
 // ---------- dynamics ----------
-function driveJoints(h) {
+// Advance joint state s (q, v, tgt) toward its target under each joint's speed and acceleration limits.
+function driveJoints(h, s = arm) {
   for (let i = 0; i < 3; i++) {
     const vm = VMAX[i] * override, am = AMAX[i] * override;
-    const err = arm.tgt[i] - arm.q[i];
-    if (Math.abs(err) < 1e-5 && Math.abs(arm.v[i]) < 1e-3) { arm.q[i] = arm.tgt[i]; arm.v[i] = 0; continue; }
+    const err = s.tgt[i] - s.q[i];
+    if (Math.abs(err) < 1e-5 && Math.abs(s.v[i]) < 1e-3) { s.q[i] = s.tgt[i]; s.v[i] = 0; continue; }
     const vdes = Math.sign(err) * Math.min(vm, Math.sqrt(2 * am * Math.abs(err)) * 0.98);
-    arm.v[i] += clamp(vdes - arm.v[i], -am * h, am * h);
-    const nq = arm.q[i] + arm.v[i] * h;
-    if ((arm.tgt[i] - nq) * err < 0) { arm.q[i] = arm.tgt[i]; arm.v[i] = 0; } else arm.q[i] = nq;
+    s.v[i] += clamp(vdes - s.v[i], -am * h, am * h);
+    const nq = s.q[i] + s.v[i] * h;
+    if ((s.tgt[i] - nq) * err < 0) { s.q[i] = s.tgt[i]; s.v[i] = 0; } else s.q[i] = nq;
   }
 }
-const settled = () => arm.q.every((q, i) => Math.abs(arm.tgt[i] - q) < 0.001 && Math.abs(arm.v[i]) < 0.005);
+const settled = (s = arm) => s.q.every((q, i) => Math.abs(s.tgt[i] - q) < 0.001 && Math.abs(s.v[i]) < 0.005);
 
 function candidate() {
   const t = fk(arm.q).t;
@@ -396,21 +506,94 @@ function buildTransfer() {
     { op: 'GRIP', open: true, name: 'OPEN', note: `part ${part.id}` },
     { op: 'LIN', x: dst.x, z: SAFE, name: `above_${d}`, v: 400 },
   ];
-  prog.src = s; prog.dst = d; prog.pc = 0; prog.ph = null;
+  prog.src = s; prog.dst = d; prog.pc = 0; prog.ph = null; prog.kind = 'xfer';
   renderProg();
+}
+
+// ---------- vision pick: camera finds the part, arm drops it in the bin ----------
+function spawnPart() {
+  partSeq++;
+  blocks.push({ id: partSeq, x: Math.round(PART.min + Math.random() * (PART.max - PART.min)), y: BS / 2, ang: 0, vy: 0,
+    color: PART_COLORS[(partSeq - 1) % PART_COLORS.length] });
+}
+function movePart(x) {
+  const b = blocks.find(b => b !== arm.held); if (!b) return;
+  b.x = clamp(Math.round(x), PART.min, PART.max); b.y = BS / 2; b.vy = 0; b.ang = 0;
+}
+function resetVision() {
+  arm.held = null; arm.released = null; blocks = []; partSeq = 0; prog.cycles = 0;
+  vis.det = null; vis.err = null; vis.missed = 0;
+  camCx.clearRect(0, 0, camEl.width, camEl.height); $('v-note').textContent = 'Waiting for the first look.';
+  spawnPart(); buildVision();
+}
+// Park clear of the camera's view, then look. `from`: back straight up out of a missed grip first.
+function buildVision(from) {
+  prog.lines = [
+    ...(from ? [{ op: 'LIN', x: Math.round(from.x), z: SAFE, name: 'retreat', v: 400 }] : []),
+    { op: 'PTP', x: BIN.x, z: BIN.drop, name: 'park' },
+    { op: 'LOOK', name: 'camera', note: 'find part' },
+  ];
+  prog.pc = 0; prog.ph = null; prog.kind = 'vision';
+  renderProg();
+}
+// Take a picture, find the part, and plan the pick from where the network says it is.
+function look() {
+  const img = VISION.capture(), t0 = performance.now(), d = VISION.forward(img);
+  vis.ms = performance.now() - t0; vis.img = img; vis.det = d;
+  const part = blocks.find(b => b !== arm.held);   // true position, used only for the error readout
+  vis.err = part ? Math.hypot(d.x - part.x, d.z - part.y) : null;
+  drawCam();
+  const x = clamp(Math.round(d.x), PART.min - 20, PART.max + 20), z = Math.max(Math.round(d.z), BS / 2);
+  prog.lines = prog.lines.slice(0, prog.pc + 1).concat([
+    { op: 'GRIP', open: true, name: 'OPEN' },
+    { op: 'PTP', x, z: SAFE, name: 'above_part' },
+    { op: 'LIN', x, z, name: 'pick', v: 250 },
+    { op: 'GRIP', open: false, name: 'CLOSE', note: 'part' },
+    { op: 'LIN', x, z: SAFE, name: 'lift', v: 400 },
+    { op: 'PTP', x: BIN.x, z: BIN.drop, name: 'above_bin' },
+    { op: 'GRIP', open: true, name: 'OPEN', note: 'drop' },
+  ]);
+  renderProg();
+}
+// Parts that come to rest inside the bin are counted and cleared; a new part appears when none is left.
+function updateBin() {
+  for (const b of blocks.filter(b => b !== arm.held && b.vy === 0 && b.y < BIN.h && Math.abs(b.x - BIN.x) < BIN.w / 2)) {
+    blocks.splice(blocks.indexOf(b), 1); prog.cycles++;
+  }
+  if (!blocks.length) spawnPart();
 }
 function stepProgram(h) {
   if (!prog.running) return;
   const ln = prog.lines[prog.pc];
   if (!prog.ph) {
     const ph = {};
-    if (ln.op === 'PTP') arm.tgt = ik(ln.x, ln.z, PHI_DOWN).q;
+    if (ln.op === 'PTP') {
+      const tgt = ik(ln.x, ln.z, PHI_DOWN).q;
+      // With the GNN, a joint move is still planned by blending joints to the end pose, but the
+      // arm is commanded with what the GNN predicts for each moment's gripper pose, every step.
+      if (solver === 'gnn' && GNN) { ph.plan = { q: arm.q.slice(), v: arm.v.slice(), tgt }; arm.tgt = arm.q.slice(); arm.v = [0, 0, 0]; }
+      else arm.tgt = tgt;
+    }
     else if (ln.op === 'LIN') { const t = fk(arm.q).t; ph.x0 = t.x; ph.z0 = t.y; ph.L = Math.hypot(ln.x - t.x, ln.z - t.y); ph.s = 0; ph.v = 0; }
+    else if (ln.op === 'LOOK') ph.t = 0;
     else { arm.gTgt = ln.open ? 1 : 0; ph.t = 0; }
     prog.ph = ph; renderCursor();
   }
   const ph = prog.ph; let done = false;
-  if (ln.op === 'PTP') done = settled();
+  if (ln.op === 'PTP' && ph.plan) {
+    const p = ph.plan; driveJoints(h, p);
+    const k = fk(p.q), e = p.q[1], side = e >= 0 ? 1 : -1, BAND = 6 * D;
+    let q = gnnSolve(k.t.x, k.t.y, k.a3, side);
+    // Near a straight arm the network holds the elbow a few degrees off straight on each branch,
+    // so flipping branches would jump ~7 degrees in one step. Blend both answers across the flip.
+    if (Math.abs(e) < BAND) {
+      const qo = gnnSolve(k.t.x, k.t.y, k.a3, -side), w = 0.5 - 0.5 * Math.abs(e) / BAND;
+      q = q.map((v, i) => v * (1 - w) + qo[i] * w);
+      const kq = fk(q); ikErr = Math.hypot(kq.t.x - k.t.x, kq.t.y - k.t.y);
+    }
+    arm.q = q; arm.tgt = q.slice(); arm.v = [0, 0, 0]; ghostQ = p.q.slice();
+    done = settled(p);
+  } else if (ln.op === 'PTP') done = settled();
   else if (ln.op === 'LIN') {
     const vmax = ln.v * override, a = 1200 * override, rem = ph.L - ph.s;
     const vdes = Math.min(vmax, Math.sqrt(2 * a * Math.max(rem, 0)));
@@ -420,26 +603,32 @@ function stepProgram(h) {
     const r = ik(ph.x0 + (ln.x - ph.x0) * f, ph.z0 + (ln.z - ph.z0) * f, PHI_DOWN);
     for (let i = 0; i < 3; i++) { arm.v[i] = (r.q[i] - arm.q[i]) / h; arm.q[i] = r.q[i]; arm.tgt[i] = r.q[i]; }
     if (ph.s >= ph.L) { done = true; arm.v = [0, 0, 0]; }
+  } else if (ln.op === 'LOOK') {
+    ph.t += h;   // let falling parts land before taking the picture
+    if (ph.t > 0.3 && blocks.every(b => b === arm.held || b.vy === 0)) { look(); done = true; }
   } else {
     ph.t += h;
     done = ln.open ? arm.g >= 0.999 : (!!arm.held || arm.g <= 0.001);
     if (ph.t < 0.12) done = false;
   }
   if (!done) return;
-  if (ln.op === 'GRIP' && !ln.open && arm.held) { const st = stacks[prog.src], i = st.indexOf(arm.held); if (i >= 0) st.splice(i, 1); }
-  if (ln.op === 'GRIP' && ln.open && arm.released) { stacks[prog.dst].push(arm.released); arm.released = null; }
+  if (prog.kind === 'vision' && ln.op === 'GRIP' && !ln.open && !arm.held) { vis.missed++; buildVision(fk(arm.q).t); return; }
+  if (prog.kind === 'xfer' && ln.op === 'GRIP' && !ln.open && arm.held) { const st = stacks[prog.src], i = st.indexOf(arm.held); if (i >= 0) st.splice(i, 1); }
+  if (prog.kind === 'xfer' && ln.op === 'GRIP' && ln.open && arm.released) { stacks[prog.dst].push(arm.released); arm.released = null; }
   prog.ph = null; prog.pc++;
-  if (prog.pc >= prog.lines.length) { prog.cycles++; buildTransfer(); } else renderCursor();
+  if (prog.pc < prog.lines.length) renderCursor();
+  else if (prog.kind === 'vision') buildVision();
+  else { prog.cycles++; buildTransfer(); }
 }
 
 // ---------- UI ----------
 const $ = id => document.getElementById(id);
 const progEl = $('prog');
 function renderProg() {
-  $('pname').textContent = `XFER ${prog.src}→${prog.dst}`;
+  $('pname').textContent = prog.kind === 'vision' ? 'VISION PICK' : `XFER ${prog.src}→${prog.dst}`;
   progEl.innerHTML = prog.lines.map(l =>
     `<li><span class="op">${l.op}</span><span class="arg">${l.name}</span><span class="xz">${
-      l.op === 'GRIP' ? (l.note || '') : `X${l.x} Z${l.z}${l.v ? ' v' + l.v : ''}`}</span></li>`).join('');
+      l.op === 'GRIP' || l.op === 'LOOK' ? (l.note || '') : `X${l.x} Z${l.z}${l.v ? ' v' + l.v : ''}`}</span></li>`).join('');
   renderCursor();
 }
 function renderCursor() {
@@ -449,15 +638,18 @@ const HINTS = {
   program: 'Auto cycle moving parts between stations A and B. PTP is a joint move (curved path), LIN is a straight-line move.',
   follow: 'Move the pointer to steer the gripper tip. Click or tap to grip and release. Scroll to tilt the tool.',
   jog: 'Drive each axis directly. Close the gripper around a part to pick it up.',
+  vision: 'A camera images the floor. A trained network finds the part, the GNN solves the joint angles, and the arm drops it in the bin. Click the floor to move the part.',
 };
-const cellWrap = $('cellWrap');
+const cellWrap = $('cellWrap'), MODES = ['program', 'follow', 'jog', 'vision'];
 function setMode(m) {
   mode = m;
-  ['program', 'follow', 'jog'].forEach(k => { $('m-' + k).setAttribute('aria-pressed', k === m); $('g-' + k).hidden = k !== m; });
-  cellWrap.classList.toggle('follow', m === 'follow');
+  MODES.forEach(k => { $('m-' + k).setAttribute('aria-pressed', k === m); $('g-' + k).hidden = k !== m; });
+  $('g-program').hidden = m !== 'program' && m !== 'vision';
+  cellWrap.classList.toggle('follow', m === 'follow'); cellWrap.classList.toggle('pick', m === 'vision');
   $('hint').textContent = HINTS[m];
   prog.ph = null;
   if (m === 'program') { resetCell(); prog.running = true; $('run').textContent = 'Pause'; }
+  if (m === 'vision') { if (GNN) setSolver('gnn'); resetVision(); prog.running = true; $('run').textContent = 'Pause'; }
   if (m === 'follow') {
     const k = fk(arm.q); follow.x = k.t.x; follow.y = k.t.y;
     follow.phi = clamp(wrapPi(k.a3), -Math.PI, Math.PI); syncPhi();
@@ -468,9 +660,28 @@ function setMode(m) {
     $('jg').value = Math.round(arm.gTgt * 100); syncJog();
   }
 }
-['program', 'follow', 'jog'].forEach(k => $('m-' + k).addEventListener('click', () => setMode(k)));
+MODES.forEach(k => $('m-' + k).addEventListener('click', () => setMode(k)));
 $('run').addEventListener('click', () => { prog.running = !prog.running; $('run').textContent = prog.running ? 'Pause' : 'Run'; });
-$('reset').addEventListener('click', () => { resetCell(); });
+$('reset').addEventListener('click', () => { if (mode === 'vision') resetVision(); else resetCell(); });
+if (!VISION) { $('m-vision').disabled = true; $('m-vision').title = 'No weights found: run vision/train.py and vision/export.py'; }
+const camEl = $('cam'), camCx = camEl.getContext('2d'), camSmall = document.createElement('canvas');
+// Show the camera image the network saw, scaled up, with its detection marked.
+function drawCam() {
+  const c = VISION.cam, n = c.w * c.h, im = new ImageData(c.w, c.h);
+  for (let k = 0; k < n; k++) {
+    im.data[4 * k] = vis.img[k] * 255; im.data[4 * k + 1] = vis.img[n + k] * 255; im.data[4 * k + 2] = vis.img[2 * n + k] * 255; im.data[4 * k + 3] = 255;
+  }
+  camSmall.width = c.w; camSmall.height = c.h; camSmall.getContext('2d').putImageData(im, 0, 0);
+  camCx.imageSmoothingEnabled = false; camCx.drawImage(camSmall, 0, 0, camEl.width, camEl.height);
+  const X = (vis.det.x - c.x0) / (c.x1 - c.x0) * camEl.width, Y = (c.z1 - vis.det.z) / (c.z1 - c.z0) * camEl.height;
+  for (const [col, lw] of [['#ffffff', 5], ['#d6202a', 2.5]]) {
+    camCx.strokeStyle = col; camCx.lineWidth = lw; camCx.beginPath(); camCx.arc(X, Y, 16, 0, 7);
+    camCx.moveTo(X - 28, Y); camCx.lineTo(X - 8, Y); camCx.moveTo(X + 8, Y); camCx.lineTo(X + 28, Y);
+    camCx.moveTo(X, Y - 28); camCx.lineTo(X, Y - 8); camCx.moveTo(X, Y + 8); camCx.lineTo(X, Y + 28); camCx.stroke();
+  }
+  $('v-note').textContent = `Found the part at X ${Math.round(vis.det.x)}, Z ${Math.round(vis.det.z)} mm` +
+    (vis.err == null ? '.' : `, ${vis.err.toFixed(1)} mm from its true centre.`);
+}
 $('ov').addEventListener('input', e => { override = e.target.value / 100; $('ov-o').textContent = e.target.value + ' %'; });
 $('angles').addEventListener('change', e => { showAngles = e.target.checked; });
 function syncPhi() { $('phi').value = Math.round(follow.phi / D); $('phi-o').textContent = fmtDeg(follow.phi).replace('.0', ''); }
@@ -479,7 +690,7 @@ function setSolver(s) {
   solver = s;
   $('s-analytic').setAttribute('aria-pressed', s === 'analytic'); $('s-gnn').setAttribute('aria-pressed', s === 'gnn');
   $('gnn-note').textContent = s === 'gnn'
-    ? `Graph network (${GNN.params.toLocaleString()} weights) predicts the joint angles. Dashed outline: the exact closed-form pose for the same target.`
+    ? `Graph network (${GNN.params.toLocaleString()} weights) predicts the joint angles at every control step of every move, 240 times a second. Dashed outline: the exact pose for the same target.`
     : 'Closed-form trigonometry solves the joint angles exactly.';
 }
 $('s-analytic').addEventListener('click', () => setSolver('analytic'));
@@ -495,7 +706,7 @@ function syncJog() {
 document.addEventListener('keydown', e => {
   if (e.code !== 'Space' || /INPUT|BUTTON|TEXTAREA|SELECT/.test(e.target.tagName)) return;
   e.preventDefault();
-  if (mode === 'follow') toggleGrip(); else if (mode === 'program') $('run').click();
+  if (mode === 'follow') toggleGrip(); else if (mode === 'program' || mode === 'vision') $('run').click();
 });
 
 // ---------- canvas ----------
@@ -595,19 +806,24 @@ function draw(now) {
   cx.strokeStyle = C.fg; cx.lineWidth = 1.5; cx.beginPath(); cx.moveTo(0, oy); cx.lineTo(VW, oy); cx.stroke();
   cx.save(); cx.beginPath(); cx.rect(0, oy, VW, 8); cx.clip(); cx.strokeStyle = C.muted; cx.lineWidth = 1; cx.globalAlpha = .6;
   cx.beginPath(); for (let X = 0; X < VW + 10; X += 8) { cx.moveTo(X, oy); cx.lineTo(X - 8, oy + 8); } cx.stroke(); cx.restore();
-  for (const k of ['A', 'B']) {
+  if (mode !== 'vision') for (const k of ['A', 'B']) {
     const [X] = S({ x: STN[k].x, y: 0 });
     cx.fillStyle = C.pad; cx.fillRect(X - 50 * sc, oy - 3, 100 * sc, 3);
     cx.fillStyle = C.fg; cx.font = `600 12px ${DISP}`; cx.textAlign = 'center'; cx.textBaseline = 'top';
     cx.fillText('STN ' + k, X, oy + 10);
   }
+  if (mode === 'vision' && VISION) {
+    const c = VISION.cam, [x0, y0] = S({ x: c.x0, y: c.z1 }), [x1, y1] = S({ x: c.x1, y: 0 });
+    cx.strokeStyle = C.muted; cx.lineWidth = 1; cx.setLineDash([4, 4]); cx.strokeRect(x0 + .5, y0 + .5, x1 - x0, y1 - y0); cx.setLineDash([]);
+    cx.fillStyle = C.muted; cx.font = `10px ${MONO}`; cx.textAlign = 'left'; cx.textBaseline = 'bottom'; cx.fillText('CAMERA VIEW', x0 + 4, y0 - 3);
+  }
 
-  // planned waypoints in program mode
-  if (mode === 'program') {
+  // planned waypoints in program and vision modes
+  if (mode === 'program' || mode === 'vision') {
     cx.fillStyle = C.muted; cx.strokeStyle = C.muted; cx.lineWidth = 1; cx.font = `10px ${MONO}`; cx.textAlign = 'left'; cx.textBaseline = 'middle';
     const seen = new Set();
     prog.lines.forEach((l, i) => {
-      if (l.op === 'GRIP') return; const key = l.x + ',' + l.z; if (seen.has(key)) return; seen.add(key);
+      if (l.op === 'GRIP' || l.op === 'LOOK') return; const key = l.x + ',' + l.z; if (seen.has(key)) return; seen.add(key);
       const [X, Y] = S({ x: l.x, y: l.z }), s = 4;
       cx.globalAlpha = i === prog.pc ? 1 : .6;
       cx.beginPath(); cx.moveTo(X, Y - s); cx.lineTo(X + s, Y); cx.lineTo(X, Y + s); cx.lineTo(X - s, Y); cx.closePath(); cx.stroke();
@@ -628,10 +844,22 @@ function draw(now) {
   for (const b of blocks) {
     const [X, Y] = S(b), s = BS * sc;
     cx.save(); cx.translate(X, Y); cx.rotate(-b.ang);
-    cx.fillStyle = C.block; cx.strokeStyle = C['block-edge']; cx.lineWidth = 1.2;
+    cx.fillStyle = b.color || C.block; cx.strokeStyle = C['block-edge']; cx.lineWidth = 1.2;
     cx.fillRect(-s / 2, -s / 2, s, s); cx.strokeRect(-s / 2 + .5, -s / 2 + .5, s - 1, s - 1);
-    cx.fillStyle = C['block-ink']; cx.font = `500 ${Math.max(9, 16 * sc)}px ${MONO}`; cx.textAlign = 'center'; cx.textBaseline = 'middle';
+    cx.fillStyle = b.color ? '#ffffff' : C['block-ink']; cx.font = `500 ${Math.max(9, 16 * sc)}px ${MONO}`; cx.textAlign = 'center'; cx.textBaseline = 'middle';
     cx.fillText(b.id, 0, 1); cx.restore();
+  }
+
+  // bin, drawn over the parts so the ones inside are hidden
+  if (mode === 'vision') {
+    const hw = BIN.w / 2, pts = [[-hw + 8, 0], [hw - 8, 0], [hw, BIN.h], [-hw, BIN.h]].map(([x, y]) => S({ x: BIN.x + x, y }));
+    cx.beginPath(); pts.forEach(([x, y], i) => i ? cx.lineTo(x, y) : cx.moveTo(x, y)); cx.closePath();
+    cx.fillStyle = C.steel; cx.fill(); cx.strokeStyle = C.joint; cx.lineWidth = 1.5; cx.stroke();
+    const [rx0, ry] = S({ x: BIN.x - hw - 5, y: BIN.h }), [rx1] = S({ x: BIN.x + hw + 5, y: BIN.h });
+    cx.lineWidth = 3; cx.beginPath(); cx.moveTo(rx0, ry); cx.lineTo(rx1, ry); cx.stroke();
+    const [X] = S({ x: BIN.x, y: 0 });
+    cx.fillStyle = C.fg; cx.font = `600 12px ${DISP}`; cx.textAlign = 'center'; cx.textBaseline = 'top';
+    cx.fillText(`BIN · ${prog.cycles}`, X, oy + 10);
   }
 
   // arm
@@ -676,6 +904,16 @@ function draw(now) {
     cx.moveTo(X, Y - 18); cx.lineTo(X, Y - 6); cx.moveTo(X, Y + 6); cx.lineTo(X, Y + 18); cx.stroke();
     if (!follow.reach) { cx.fillStyle = col; cx.font = `500 11px ${MONO}`; cx.textAlign = 'left'; cx.textBaseline = 'bottom'; cx.fillText('out of reach', X + 14, Y - 12); }
   }
+
+  // where the vision network last found the part
+  if (mode === 'vision' && vis.det) {
+    const [X, Y] = S({ x: vis.det.x, y: vis.det.z });
+    cx.strokeStyle = C.live; cx.lineWidth = 1.5; cx.beginPath(); cx.arc(X, Y, 9, 0, 7);
+    cx.moveTo(X - 15, Y); cx.lineTo(X - 5, Y); cx.moveTo(X + 5, Y); cx.lineTo(X + 15, Y);
+    cx.moveTo(X, Y - 15); cx.lineTo(X, Y - 5); cx.moveTo(X, Y + 5); cx.lineTo(X, Y + 15); cx.stroke();
+    cx.fillStyle = C.live; cx.font = `500 11px ${MONO}`; cx.textAlign = 'center'; cx.textBaseline = 'bottom';
+    cx.fillText('found', X, Y - 18);
+  }
 }
 
 // joint trace
@@ -706,7 +944,9 @@ function setTarget(e) {
   const r = cv.getBoundingClientRect();
   follow.x = (e.clientX - r.left - ox) / sc; follow.y = (oy - (e.clientY - r.top)) / sc;
 }
-cv.addEventListener('pointerdown', e => { if (mode !== 'follow') return; setTarget(e); down = { x: e.clientX, y: e.clientY }; cv.setPointerCapture(e.pointerId); });
+cv.addEventListener('pointerdown', e => {
+  if (mode === 'vision') { movePart((e.clientX - cv.getBoundingClientRect().left - ox) / sc); return; }
+  if (mode !== 'follow') return; setTarget(e); down = { x: e.clientX, y: e.clientY }; cv.setPointerCapture(e.pointerId); });
 cv.addEventListener('pointermove', e => { if (mode === 'follow' && (e.pointerType === 'mouse' || down)) setTarget(e); });
 cv.addEventListener('pointerup', e => {
   if (mode !== 'follow' || !down) return;
@@ -734,9 +974,18 @@ function tele() {
   const useGnn = solver === 'gnn' && mode !== 'jog';
   $('t-ike').textContent = useGnn ? ikErr.toFixed(2) + ' mm' : (solver === 'gnn' ? 'not used in jog' : 'exact');
   $('t-ikt').textContent = useGnn ? ikMs.toFixed(2) + ' ms' : '–';
+  const tNow = performance.now(), rate = ikCalls * 1000 / Math.max(1, tNow - rateT0); rateT0 = tNow; ikCalls = 0;
+  $('t-ikr').textContent = useGnn ? Math.round(rate) + ' /s' : '–';
   if (mode === 'jog' || solver !== 'gnn') ghostQ = null;
+  const seen = mode === 'vision' && vis.det;
+  $('t-ve').textContent = seen && vis.err != null ? vis.err.toFixed(2) + ' mm' : '–';
+  $('t-vt').textContent = seen ? vis.ms.toFixed(1) + ' ms' : '–';
+  if (mode === 'vision') $('v-count').textContent = `${prog.cycles} binned · ${vis.missed} missed`;
   const pill = $('pill');
-  if (mode === 'program') { pill.dataset.s = prog.running ? 'run' : 'pause'; pill.textContent = prog.running ? 'RUN · AUTO' : 'PAUSED'; }
+  if (mode === 'program' || mode === 'vision') {
+    pill.dataset.s = prog.running ? 'run' : 'pause';
+    pill.textContent = prog.running ? (mode === 'vision' ? 'RUN · VISION' : 'RUN · AUTO') : 'PAUSED';
+  }
   else if (mode === 'follow') { pill.dataset.s = reach ? 'live' : 'alert'; pill.textContent = reach ? 'FOLLOW' : 'OUT OF REACH'; }
   else { pill.dataset.s = 'live'; pill.textContent = 'JOG · MANUAL'; }
   if (mode === 'follow') $('grip-f').textContent = (arm.held || arm.gTgt < 0.5) ? 'Open gripper' : 'Close gripper';
@@ -750,8 +999,9 @@ function frame(now) {
   acc += dt; const H = 1 / 240;
   while (acc >= H) {
     driveJoints(H);
-    if (mode === 'program') stepProgram(H);
+    if (mode === 'program' || mode === 'vision') stepProgram(H);
     updateGrip(H); syncHeld(); updateBlocks(H);
+    if (mode === 'vision') updateBin();
     acc -= H; sampleT += H;
     if (sampleT >= 1 / 30) { sampleT -= 1 / 30; hist.push(arm.q.map(q => q / D)); if (hist.length > TRN) hist.shift(); }
   }

@@ -85,4 +85,6 @@ class IKGNN(nn.Module):
             agg = torch.zeros_like(h).index_add_(1, self.dst, e)
             h = h + node_mlp(torch.cat([h, agg], -1))
         y = self.dec(h[:, :3]).squeeze(-1)                     # joints 0..2
-        return self.q_mid + self.q_half * y
+        # tanh keeps each angle inside its joint limits (all under 360 deg wide), so the
+        # network can't settle on a 2*pi-shifted equivalent that FK can't tell apart.
+        return self.q_mid + self.q_half * torch.tanh(y)
