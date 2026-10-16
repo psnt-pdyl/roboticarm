@@ -1,0 +1,8 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Training outputs (regenerate with gnn/train.py)
+gnn/ik_gnn.pt
+gnn/train.log

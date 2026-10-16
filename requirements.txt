@@ -1,0 +1,5 @@
+# CUDA 12.6 build: the newest PyTorch CUDA line that still supports Pascal GPUs (GTX 10xx).
+--index-url https://download.pytorch.org/whl/cu126
+--extra-index-url https://pypi.org/simple
+torch
+numpy

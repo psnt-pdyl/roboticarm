@@ -1,0 +1,776 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Planar Arm Cell</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Barlow:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: the work cell canvas is the hero; a teach-pendant column sits to its right; a joint-angle trace runs beneath. Stacks to one column on phones. */
+:root{
+  --bg:#e3e7eb; --panel:#f4f6f8; --fg:#17202a; --muted:#596775; --line:#c4cdd6; --grid:#d5dce3;
+  --arm:#efb300; --arm-edge:#7a5900; --arm-soft:rgba(239,179,0,.22);
+  --joint:#28323d; --steel:#a7b2bd; --block:#687a8c; --block-edge:#35424f; --block-ink:#f4f6f8; --pad:#9aa6b2;
+  --alert:#c93c24; --ok:#2a8755; --live:#1f6bcc;
+  --q1:#1f6bcc; --q2:#c4430e; --q3:#0d877b;
+  --f-display:"Barlow Condensed","Arial Narrow",sans-serif;
+  --f-body:"Barlow",system-ui,sans-serif;
+  --f-mono:"JetBrains Mono",ui-monospace,Menlo,monospace;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#0f141a; --panel:#171e26; --fg:#e4e9ef; --muted:#8c99a7; --line:#2a3541; --grid:#222c37;
+  --arm:#f4bf27; --arm-edge:#8f6a00; --arm-soft:rgba(244,191,39,.16);
+  --joint:#4a5868; --steel:#7f8c99; --block:#55687c; --block-edge:#2a3542; --block-ink:#eef2f6; --pad:#5a6877;
+  --alert:#f0674c; --ok:#4cc187; --live:#5d9ef2;
+  --q1:#5d9ef2; --q2:#f07d42; --q3:#33c3b3; color-scheme:dark;
+}}
+:root[data-theme="dark"]{
+  --bg:#0f141a; --panel:#171e26; --fg:#e4e9ef; --muted:#8c99a7; --line:#2a3541; --grid:#222c37;
+  --arm:#f4bf27; --arm-edge:#8f6a00; --arm-soft:rgba(244,191,39,.16);
+  --joint:#4a5868; --steel:#7f8c99; --block:#55687c; --block-edge:#2a3542; --block-ink:#eef2f6; --pad:#5a6877;
+  --alert:#f0674c; --ok:#4cc187; --live:#5d9ef2;
+  --q1:#5d9ef2; --q2:#f07d42; --q3:#33c3b3; color-scheme:dark;
+}
+*{box-sizing:border-box}
+body{margin:0}
+[hidden]{display:none!important}
+body{background:var(--bg);color:var(--fg);font-family:var(--f-body);font-size:15px;line-height:1.45;
+  padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:20px 32px}
+.wrap{max-width:1280px;margin:0 auto;display:grid;gap:16px}
+.top{display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:12px}
+h1{font-family:var(--f-display);font-weight:700;font-size:clamp(28px,4.2vw,42px);line-height:1;margin:0;text-transform:uppercase;letter-spacing:.01em;text-wrap:balance}
+.spec{font-family:var(--f-mono);font-size:12px;color:var(--muted);margin:6px 0 0}
+.pill{font-family:var(--f-mono);font-size:12px;letter-spacing:.08em;padding:5px 11px;border-radius:999px;border:1px solid currentColor;display:inline-flex;gap:8px;align-items:center;white-space:nowrap}
+.pill::before{content:"";width:8px;height:8px;border-radius:50%;background:currentColor}
+.pill[data-s="run"]{color:var(--ok)} .pill[data-s="pause"]{color:var(--muted)}
+.pill[data-s="alert"]{color:var(--alert)} .pill[data-s="live"]{color:var(--live)}
+.layout{display:grid;grid-template-columns:minmax(0,1fr) 330px;gap:16px;align-items:start}
+.stage{display:grid;gap:16px;min-width:0}
+.cell{position:relative;aspect-ratio:16/10;max-width:100%;background:var(--panel);border:1px solid var(--line);border-radius:6px;overflow:hidden}
+.cell canvas{width:100%;height:100%;display:block;touch-action:pan-y}
+.cell.follow canvas{touch-action:none;cursor:crosshair}
+.hint{position:absolute;left:10px;top:10px;right:10px;max-width:46ch;font-size:13px;color:var(--muted);background:var(--panel);border:1px solid var(--line);border-radius:4px;padding:6px 9px;pointer-events:none}
+.trace{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:10px 14px 8px;display:grid;gap:6px}
+.trace header{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:baseline;gap:6px 14px}
+.legend{display:flex;gap:14px;font-family:var(--f-mono);font-size:12px;color:var(--muted)}
+.legend span{display:inline-flex;align-items:center;gap:6px}
+.legend i{width:14px;height:3px;border-radius:2px;display:inline-block}
+.trace canvas{width:100%;height:130px;display:block}
+.pendant{background:var(--panel);border:1px solid var(--line);border-radius:6px;display:grid;min-width:0}
+.sec{padding:14px 16px;border-top:1px solid var(--line);display:grid;gap:10px;min-width:0}
+.sec:first-child{border-top:0}
+.label{font-family:var(--f-display);font-weight:600;font-size:13px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);display:flex;justify-content:space-between;gap:8px}
+.label b{font-weight:600;color:var(--fg);letter-spacing:.06em}
+.seg{display:grid;grid-template-columns:repeat(3,1fr);border:1px solid var(--line);border-radius:5px;overflow:hidden}
+.seg button{font:600 15px/1 var(--f-display);letter-spacing:.08em;text-transform:uppercase;padding:10px 6px;background:transparent;color:var(--fg);border:0;border-left:1px solid var(--line);cursor:pointer}
+.seg button:first-child{border-left:0}
+.seg button[aria-pressed="true"]{background:var(--fg);color:var(--panel)}
+.prog{list-style:none;margin:0;padding:0;font-family:var(--f-mono);font-size:12px;counter-reset:ln}
+.prog li{display:grid;grid-template-columns:20px 40px minmax(0,1fr) auto;gap:4px;padding:3px 6px;border-radius:3px;color:var(--muted);white-space:nowrap}
+.prog li::before{counter-increment:ln;content:counter(ln);opacity:.55}
+.prog li .op{color:var(--fg);font-weight:500}
+.prog li.done{opacity:.55}
+.prog li.cur{background:var(--arm-soft);color:var(--fg)}
+.prog li .arg{overflow:hidden;text-overflow:ellipsis}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.btn{font:600 14px/1 var(--f-display);letter-spacing:.08em;text-transform:uppercase;padding:9px 14px;border-radius:4px;border:1px solid var(--line);background:var(--bg);color:var(--fg);cursor:pointer}
+.btn.primary{background:var(--arm);border-color:var(--arm-edge);color:#1b1500}
+.check{display:flex;gap:8px;align-items:center;font-size:14px;margin-left:auto;cursor:pointer}
+.ctl{display:grid;gap:4px}
+.ctl .top-line{display:flex;justify-content:space-between;font-size:14px}
+.ctl output{font-family:var(--f-mono);font-size:13px;font-variant-numeric:tabular-nums}
+input[type=range]{width:100%;accent-color:var(--fg);margin:0}
+.note{font-size:13px;color:var(--muted);margin:0}
+.tele{display:grid;grid-template-columns:1fr 1fr;gap:10px 14px;margin:0}
+.tele div{display:grid;gap:1px;min-width:0}
+.tele dt{font:600 11.5px/1.2 var(--f-display);letter-spacing:.12em;text-transform:uppercase;color:var(--muted)}
+.tele dd{margin:0;font-family:var(--f-mono);font-size:14px;font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tele dd.warn{color:var(--alert)}
+button:focus-visible,input:focus-visible{outline:2px solid var(--live);outline-offset:2px}
+@media (max-width:880px){.layout{grid-template-columns:minmax(0,1fr)} .cell{aspect-ratio:4/3}}
+</style>
+</head>
+<body>
+
+<div class="wrap">
+  <header class="top">
+    <div>
+      <h1>Planar Arm Cell</h1>
+      <p class="spec">RRR manipulator · L1 360 · L2 300 · tool 120 · reach 780 mm</p>
+    </div>
+    <span class="pill" id="pill" data-s="run">RUN · AUTO</span>
+  </header>
+
+  <div class="layout">
+    <div class="stage">
+      <div class="cell" id="cellWrap">
+        <canvas id="cell" aria-label="Side view of the robot arm work cell"></canvas>
+        <p class="hint" id="hint"></p>
+      </div>
+      <section class="trace" aria-label="Joint angle history">
+        <header>
+          <span class="label">Joint trace · last 8 s</span>
+          <span class="legend">
+            <span><i style="background:var(--q1)"></i>A1 shoulder</span>
+            <span><i style="background:var(--q2)"></i>A2 elbow</span>
+            <span><i style="background:var(--q3)"></i>A3 wrist</span>
+          </span>
+        </header>
+        <canvas id="trace"></canvas>
+      </section>
+    </div>
+
+    <aside class="pendant" aria-label="Teach pendant">
+      <div class="sec">
+        <div class="label">Mode</div>
+        <div class="seg" role="group" aria-label="Control mode">
+          <button id="m-program" aria-pressed="true">Program</button>
+          <button id="m-follow" aria-pressed="false">Follow</button>
+          <button id="m-jog" aria-pressed="false">Jog</button>
+        </div>
+      </div>
+
+      <div class="sec" id="g-program">
+        <div class="label">Program <b id="pname">XFER A→B</b></div>
+        <ol class="prog" id="prog"></ol>
+        <div class="row">
+          <button class="btn primary" id="run">Pause</button>
+          <button class="btn" id="reset">Reset cell</button>
+        </div>
+      </div>
+
+      <div class="sec" id="g-follow" hidden>
+        <div class="ctl">
+          <div class="top-line"><label for="phi">Tool angle</label><output id="phi-o">−90°</output></div>
+          <input type="range" id="phi" min="-180" max="180" step="1" value="-90">
+        </div>
+        <div class="row">
+          <button class="btn primary" id="grip-f">Close gripper</button>
+        </div>
+        <p class="note">Space also toggles the gripper.</p>
+      </div>
+
+      <div class="sec" id="g-jog" hidden>
+        <div class="ctl"><div class="top-line"><label for="j1">A1 shoulder</label><output id="j1-o"></output></div>
+          <input type="range" id="j1" min="-20" max="200" step="0.5"></div>
+        <div class="ctl"><div class="top-line"><label for="j2">A2 elbow</label><output id="j2-o"></output></div>
+          <input type="range" id="j2" min="-160" max="160" step="0.5"></div>
+        <div class="ctl"><div class="top-line"><label for="j3">A3 wrist</label><output id="j3-o"></output></div>
+          <input type="range" id="j3" min="-140" max="140" step="0.5"></div>
+        <div class="ctl"><div class="top-line"><label for="jg">Gripper opening</label><output id="jg-o"></output></div>
+          <input type="range" id="jg" min="0" max="100" step="1"></div>
+      </div>
+
+      <div class="sec">
+        <div class="ctl">
+          <div class="top-line"><label for="ov">Speed override</label><output id="ov-o">100 %</output></div>
+          <input type="range" id="ov" min="10" max="200" step="5" value="100">
+        </div>
+        <label class="check" style="margin-left:0"><input type="checkbox" id="angles" checked> Show joint angles</label>
+      </div>
+
+      <div class="sec">
+        <div class="label">IK solver</div>
+        <div class="seg" role="group" aria-label="Inverse kinematics solver" style="grid-template-columns:repeat(2,1fr)">
+          <button id="s-analytic" aria-pressed="true">Closed-form</button>
+          <button id="s-gnn" aria-pressed="false">GNN</button>
+        </div>
+        <p class="note" id="gnn-note">Closed-form trigonometry solves the joint angles exactly.</p>
+      </div>
+
+      <div class="sec">
+        <div class="label">Telemetry</div>
+        <dl class="tele">
+          <div><dt>A1</dt><dd id="t-a1">–</dd></div>
+          <div><dt>TCP X</dt><dd id="t-x">–</dd></div>
+          <div><dt>A2</dt><dd id="t-a2">–</dd></div>
+          <div><dt>TCP Z</dt><dd id="t-z">–</dd></div>
+          <div><dt>A3</dt><dd id="t-a3">–</dd></div>
+          <div><dt>Tool angle</dt><dd id="t-phi">–</dd></div>
+          <div><dt>Gripper</dt><dd id="t-g">–</dd></div>
+          <div><dt>TCP speed</dt><dd id="t-v">–</dd></div>
+          <div><dt>Cycles</dt><dd id="t-c">0</dd></div>
+          <div><dt>Reach</dt><dd id="t-r">OK</dd></div>
+          <div><dt>IK error</dt><dd id="t-ike">exact</dd></div>
+          <div><dt>IK time</dt><dd id="t-ikt">–</dd></div>
+        </dl>
+      </div>
+    </aside>
+  </div>
+</div>
+
+<script src="ik-gnn-weights.js"></script>
+<script>
+(() => {
+const D = Math.PI / 180;
+const L1 = 360, L2 = 300, L3 = 120, SH = { x: 0, y: 160 }, BS = 60, SAFE = 270, PHI_DOWN = -90 * D;
+const LIM = [[-20, 200], [-160, 160], [-140, 140]].map(r => r.map(v => v * D));
+const VMAX = [110, 130, 200].map(v => v * D), AMAX = [320, 380, 600].map(v => v * D);
+const STN = { A: { x: 300 }, B: { x: 540 } };
+const GC = (BS / 2 - 12) / 43;               // gripper value at which fingers touch a part
+const halfW = g => 12 + g * 43;              // finger inner half-gap in mm
+const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
+const wrapPi = a => { while (a > Math.PI) a -= 2 * Math.PI; while (a <= -Math.PI) a += 2 * Math.PI; return a; };
+const fmtDeg = r => (r < 0 ? '−' : '') + Math.abs(r / D).toFixed(1) + '°';
+const fmtMm = v => (v < 0 ? '−' : '') + Math.abs(v).toFixed(1);
+const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+const arm = { q: [100 * D, -110 * D, -80 * D], v: [0, 0, 0], tgt: null, g: 1, gTgt: 1, held: null, released: null, elbow: -1 };
+arm.tgt = arm.q.slice();
+let blocks = [], mode = 'program', override = 1, showAngles = true, lastReach = true;
+const follow = { x: 420, y: 200, phi: PHI_DOWN, reach: true };
+const prog = { lines: [], pc: 0, ph: null, running: !reduce, cycles: 0, dir: 'AB', src: 'A', dst: 'B' };
+const stacks = { A: [], B: [] };
+
+// ---------- kinematics ----------
+function fk(q) {
+  const a1 = q[0], a2 = a1 + q[1], a3 = a2 + q[2];
+  const e = { x: SH.x + L1 * Math.cos(a1), y: SH.y + L1 * Math.sin(a1) };
+  const w = { x: e.x + L2 * Math.cos(a2), y: e.y + L2 * Math.sin(a2) };
+  const t = { x: w.x + L3 * Math.cos(a3), y: w.y + L3 * Math.sin(a3) };
+  return { s: SH, e, w, t, a1, a2, a3 };
+}
+// Graph-network IK (weights from gnn/export.py). Same graph as gnn/model.py:
+// shoulder–elbow–wrist–tcp chain plus a goal node linked to every chain node.
+const GNN = (() => {
+  const W = window.IK_GNN; if (!W) return null;
+  const T = {};
+  for (const [k, v] of Object.entries(W.tensors)) {
+    const bin = atob(v.b64), buf = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) buf[i] = bin.charCodeAt(i);
+    T[k] = { s: v.shape, d: new Float32Array(buf.buffer) };
+  }
+  const H = W.hidden, NS = W.steps, N = 5;
+  const src = Array.from(T.src.d, Math.round), dst = Array.from(T.dst.d, Math.round), E = src.length;
+  const lin = (name, x) => {
+    const w = T[name + '.weight'], b = T[name + '.bias'], [o, n] = w.s, out = new Float32Array(o);
+    for (let i = 0; i < o; i++) { let s = b.d[i]; const r = i * n; for (let j = 0; j < n; j++) s += w.d[r + j] * x[j]; out[i] = s; }
+    return out;
+  };
+  const mlp = (name, x, norm = true) => {
+    const hd = lin(name + '.l1', x);
+    for (let i = 0; i < hd.length; i++) hd[i] = hd[i] / (1 + Math.exp(-hd[i]));
+    const o = lin(name + '.l2', hd);
+    if (norm) {
+      const g = T[name + '.norm.weight'].d, b = T[name + '.norm.bias'].d;
+      let m = 0, v = 0; for (const a of o) m += a; m /= o.length;
+      for (const a of o) v += (a - m) * (a - m); v /= o.length;
+      const inv = 1 / Math.sqrt(v + 1e-5);
+      for (let i = 0; i < o.length; i++) o[i] = (o[i] - m) * inv * g[i] + b[i];
+    }
+    return o;
+  };
+  const row = (t, i) => t.d.subarray(i * t.s[1], (i + 1) * t.s[1]);
+  const eEnc = Array.from({ length: E }, (_, k) => mlp('enc_edge', row(T.edge0, k)));
+  const forward = goal => {
+    const h = [];
+    for (let n = 0; n < N; n++) { const x = row(T.node0, n).slice(); if (n === 4) x.set(goal, 5); h.push(mlp('enc_node', x)); }
+    const e = eEnc.map(a => a.slice()), cat = new Float32Array(3 * H), cat2 = new Float32Array(2 * H);
+    for (let s = 0; s < NS; s++) {
+      for (let k = 0; k < E; k++) {
+        cat.set(e[k], 0); cat.set(h[src[k]], H); cat.set(h[dst[k]], 2 * H);
+        const m = mlp(`edge_mlps.${s}`, cat); for (let i = 0; i < H; i++) e[k][i] += m[i];
+      }
+      const agg = Array.from({ length: N }, () => new Float32Array(H));
+      for (let k = 0; k < E; k++) for (let i = 0; i < H; i++) agg[dst[k]][i] += e[k][i];
+      for (let n = 0; n < N; n++) {
+        cat2.set(h[n], 0); cat2.set(agg[n], H);
+        const m = mlp(`node_mlps.${s}`, cat2); for (let i = 0; i < H; i++) h[n][i] += m[i];
+      }
+    }
+    return [0, 1, 2].map(n => T.q_mid.d[n] + T.q_half.d[n] * mlp('dec', h[n], false)[0]);
+  };
+  return { forward, params: Object.entries(T).filter(([k]) => k.endsWith('weight') || k.endsWith('bias')).reduce((a, [, t]) => a + t.d.length, 0), eval: W.eval };
+})();
+
+let solver = 'analytic', ikErr = 0, ikMs = 0, ghostQ = null;
+function ik(tx, ty, phi) {
+  const r = ikAnalytic(tx, ty, phi);
+  if (solver !== 'gnn' || !GNN) { ghostQ = null; return r; }
+  // Project the target onto the reachable workspace (pure geometry) so the network sees an in-range goal.
+  let wx = tx - L3 * Math.cos(phi) - SH.x, wy = ty - L3 * Math.sin(phi) - SH.y;
+  const d = Math.hypot(wx, wy), dmax = L1 + L2 - 0.5, dmin = Math.abs(L1 - L2) + 0.5;
+  if (d > dmax) { wx *= dmax / d; wy *= dmax / d; } else if (d < dmin && d > 1e-6) { wx *= dmin / d; wy *= dmin / d; }
+  const gx = SH.x + wx + L3 * Math.cos(phi), gy = SH.y + wy + L3 * Math.sin(phi);
+  const t0 = performance.now();
+  const q = GNN.forward([(gx - SH.x) / (L1 + L2 + L3), (gy - SH.y) / (L1 + L2 + L3), Math.sin(phi), Math.cos(phi), arm.elbow]);
+  ikMs += (performance.now() - t0 - ikMs) * 0.1;
+  for (let i = 0; i < 3; i++) q[i] = clamp(q[i], LIM[i][0], LIM[i][1]);
+  const k = fk(q); ikErr = Math.hypot(k.t.x - gx, k.t.y - gy);
+  ghostQ = r.q;
+  return { q, reach: r.reach };
+}
+function ikAnalytic(tx, ty, phi) {
+  let wx = tx - L3 * Math.cos(phi) - SH.x, wy = ty - L3 * Math.sin(phi) - SH.y;
+  let d = Math.hypot(wx, wy), reach = true;
+  const dmax = L1 + L2 - 0.5, dmin = Math.abs(L1 - L2) + 0.5;
+  if (d > dmax) { wx *= dmax / d; wy *= dmax / d; d = dmax; reach = false; }
+  if (d < dmin) { if (d < 1e-6) { wx = dmin; wy = 0; } else { wx *= dmin / d; wy *= dmin / d; } d = dmin; reach = false; }
+  if (wx > 40) arm.elbow = -1; else if (wx < -40) arm.elbow = 1;   // elbow-up, with hysteresis over the shoulder
+  const c = (d * d - L1 * L1 - L2 * L2) / (2 * L1 * L2);
+  const q2 = arm.elbow * Math.acos(clamp(c, -1, 1));
+  let q1 = Math.atan2(wy, wx) - Math.atan2(L2 * Math.sin(q2), L1 + L2 * Math.cos(q2));
+  q1 = wrapPi(q1); if (q1 < -90 * D) q1 += 2 * Math.PI;
+  const q = [q1, q2, wrapPi(phi - q1 - q2)];
+  for (let i = 0; i < 3; i++) { const c2 = clamp(q[i], LIM[i][0], LIM[i][1]); if (c2 !== q[i]) { q[i] = c2; reach = false; } }
+  return { q, reach };
+}
+
+// ---------- dynamics ----------
+function driveJoints(h) {
+  for (let i = 0; i < 3; i++) {
+    const vm = VMAX[i] * override, am = AMAX[i] * override;
+    const err = arm.tgt[i] - arm.q[i];
+    if (Math.abs(err) < 1e-5 && Math.abs(arm.v[i]) < 1e-3) { arm.q[i] = arm.tgt[i]; arm.v[i] = 0; continue; }
+    const vdes = Math.sign(err) * Math.min(vm, Math.sqrt(2 * am * Math.abs(err)) * 0.98);
+    arm.v[i] += clamp(vdes - arm.v[i], -am * h, am * h);
+    const nq = arm.q[i] + arm.v[i] * h;
+    if ((arm.tgt[i] - nq) * err < 0) { arm.q[i] = arm.tgt[i]; arm.v[i] = 0; } else arm.q[i] = nq;
+  }
+}
+const settled = () => arm.q.every((q, i) => Math.abs(arm.tgt[i] - q) < 0.001 && Math.abs(arm.v[i]) < 0.005);
+
+function candidate() {
+  const t = fk(arm.q).t;
+  return blocks.find(b => b !== arm.held && Math.abs(b.vy) < 1 && Math.hypot(b.x - t.x, b.y - t.y) < 22) || null;
+}
+function release() {
+  const b = arm.held; arm.held = null;
+  b.ang = 0; b.vy = 0; b.x = clamp(b.x, -220, 840); b.y = Math.max(b.y, BS / 2);
+  arm.released = b;
+}
+function updateGrip(h) {
+  const rate = 2.4 * override, g0 = arm.g;
+  let g1 = g0 + clamp(arm.gTgt - g0, -rate * h, rate * h);
+  if (arm.held) {
+    if (arm.gTgt > GC + 0.02) release(); else g1 = Math.max(g1, GC);
+  } else if (g0 >= GC && g1 < GC) {
+    const c = candidate(); if (c) { arm.held = c; c.vy = 0; g1 = GC; }
+  }
+  arm.g = g1;
+}
+function syncHeld() {
+  if (!arm.held) return;
+  const k = fk(arm.q);
+  arm.held.x = k.t.x; arm.held.y = k.t.y; arm.held.ang = k.a3 + 90 * D;
+}
+function updateBlocks(h) {
+  const free = blocks.filter(b => b !== arm.held).sort((a, b) => a.y - b.y);
+  for (const b of free) {
+    let top = 0;
+    for (const o of blocks) {
+      if (o === b || o === arm.held) continue;
+      if (Math.abs(o.x - b.x) < BS * 0.9 && o.y < b.y - 1) top = Math.max(top, o.y + BS / 2);
+    }
+    const rest = top + BS / 2;
+    if (b.y > rest + 0.01) { b.vy -= 9810 * h; b.y += b.vy * h; if (b.y <= rest) { b.y = rest; b.vy = 0; } }
+    else { b.y = Math.max(b.y, rest); b.vy = 0; }
+  }
+}
+
+// ---------- program ----------
+function resetCell() {
+  arm.held = null; arm.released = null;
+  blocks = [1, 2, 3].map((n, i) => ({ id: n, x: STN.A.x, y: BS / 2 + i * BS, ang: 0, vy: 0 }));
+  stacks.A = blocks.slice(); stacks.B = [];
+  prog.dir = 'AB'; prog.cycles = 0;
+  buildTransfer();
+}
+function buildTransfer() {
+  if (prog.dir === 'AB' && !stacks.A.length) prog.dir = 'BA';
+  else if (prog.dir === 'BA' && !stacks.B.length) prog.dir = 'AB';
+  const s = prog.dir[0], d = prog.dir[1], src = STN[s], dst = STN[d];
+  const k = stacks[s].length - 1, m = stacks[d].length, part = stacks[s][k];
+  const zG = Math.round(k * BS + BS / 2), zP = Math.round(m * BS + BS / 2 + 2);
+  prog.lines = [
+    { op: 'GRIP', open: true, name: 'OPEN' },
+    { op: 'PTP', x: src.x, z: SAFE, name: `above_${s}` },
+    { op: 'LIN', x: src.x, z: zG, name: `pick_${s}${k + 1}`, v: 250 },
+    { op: 'GRIP', open: false, name: 'CLOSE', note: `part ${part.id}` },
+    { op: 'LIN', x: src.x, z: SAFE, name: `above_${s}`, v: 400 },
+    { op: 'PTP', x: dst.x, z: SAFE, name: `above_${d}` },
+    { op: 'LIN', x: dst.x, z: zP, name: `place_${d}${m + 1}`, v: 250 },
+    { op: 'GRIP', open: true, name: 'OPEN', note: `part ${part.id}` },
+    { op: 'LIN', x: dst.x, z: SAFE, name: `above_${d}`, v: 400 },
+  ];
+  prog.src = s; prog.dst = d; prog.pc = 0; prog.ph = null;
+  renderProg();
+}
+function stepProgram(h) {
+  if (!prog.running) return;
+  const ln = prog.lines[prog.pc];
+  if (!prog.ph) {
+    const ph = {};
+    if (ln.op === 'PTP') arm.tgt = ik(ln.x, ln.z, PHI_DOWN).q;
+    else if (ln.op === 'LIN') { const t = fk(arm.q).t; ph.x0 = t.x; ph.z0 = t.y; ph.L = Math.hypot(ln.x - t.x, ln.z - t.y); ph.s = 0; ph.v = 0; }
+    else { arm.gTgt = ln.open ? 1 : 0; ph.t = 0; }
+    prog.ph = ph; renderCursor();
+  }
+  const ph = prog.ph; let done = false;
+  if (ln.op === 'PTP') done = settled();
+  else if (ln.op === 'LIN') {
+    const vmax = ln.v * override, a = 1200 * override, rem = ph.L - ph.s;
+    const vdes = Math.min(vmax, Math.sqrt(2 * a * Math.max(rem, 0)));
+    ph.v += clamp(vdes - ph.v, -a * h, a * h);
+    ph.s = Math.min(ph.L, ph.s + Math.max(ph.v, 2) * h);
+    const f = ph.L > 0 ? ph.s / ph.L : 1;
+    const r = ik(ph.x0 + (ln.x - ph.x0) * f, ph.z0 + (ln.z - ph.z0) * f, PHI_DOWN);
+    for (let i = 0; i < 3; i++) { arm.v[i] = (r.q[i] - arm.q[i]) / h; arm.q[i] = r.q[i]; arm.tgt[i] = r.q[i]; }
+    if (ph.s >= ph.L) { done = true; arm.v = [0, 0, 0]; }
+  } else {
+    ph.t += h;
+    done = ln.open ? arm.g >= 0.999 : (!!arm.held || arm.g <= 0.001);
+    if (ph.t < 0.12) done = false;
+  }
+  if (!done) return;
+  if (ln.op === 'GRIP' && !ln.open && arm.held) { const st = stacks[prog.src], i = st.indexOf(arm.held); if (i >= 0) st.splice(i, 1); }
+  if (ln.op === 'GRIP' && ln.open && arm.released) { stacks[prog.dst].push(arm.released); arm.released = null; }
+  prog.ph = null; prog.pc++;
+  if (prog.pc >= prog.lines.length) { prog.cycles++; buildTransfer(); } else renderCursor();
+}
+
+// ---------- UI ----------
+const $ = id => document.getElementById(id);
+const progEl = $('prog');
+function renderProg() {
+  $('pname').textContent = `XFER ${prog.src}→${prog.dst}`;
+  progEl.innerHTML = prog.lines.map(l =>
+    `<li><span class="op">${l.op}</span><span class="arg">${l.name}</span><span class="xz">${
+      l.op === 'GRIP' ? (l.note || '') : `X${l.x} Z${l.z}${l.v ? ' v' + l.v : ''}`}</span></li>`).join('');
+  renderCursor();
+}
+function renderCursor() {
+  [...progEl.children].forEach((li, i) => { li.classList.toggle('cur', i === prog.pc); li.classList.toggle('done', i < prog.pc); });
+}
+const HINTS = {
+  program: 'Auto cycle moving parts between stations A and B. PTP is a joint move (curved path), LIN is a straight-line move.',
+  follow: 'Move the pointer to steer the gripper tip. Click or tap to grip and release. Scroll to tilt the tool.',
+  jog: 'Drive each axis directly. Close the gripper around a part to pick it up.',
+};
+const cellWrap = $('cellWrap');
+function setMode(m) {
+  mode = m;
+  ['program', 'follow', 'jog'].forEach(k => { $('m-' + k).setAttribute('aria-pressed', k === m); $('g-' + k).hidden = k !== m; });
+  cellWrap.classList.toggle('follow', m === 'follow');
+  $('hint').textContent = HINTS[m];
+  prog.ph = null;
+  if (m === 'program') { resetCell(); prog.running = true; $('run').textContent = 'Pause'; }
+  if (m === 'follow') {
+    const k = fk(arm.q); follow.x = k.t.x; follow.y = k.t.y;
+    follow.phi = clamp(wrapPi(k.a3), -Math.PI, Math.PI); syncPhi();
+  }
+  if (m === 'jog') {
+    arm.tgt = arm.q.slice();
+    ['j1', 'j2', 'j3'].forEach((id, i) => { $(id).value = (arm.q[i] / D).toFixed(1); });
+    $('jg').value = Math.round(arm.gTgt * 100); syncJog();
+  }
+}
+['program', 'follow', 'jog'].forEach(k => $('m-' + k).addEventListener('click', () => setMode(k)));
+$('run').addEventListener('click', () => { prog.running = !prog.running; $('run').textContent = prog.running ? 'Pause' : 'Run'; });
+$('reset').addEventListener('click', () => { resetCell(); });
+$('ov').addEventListener('input', e => { override = e.target.value / 100; $('ov-o').textContent = e.target.value + ' %'; });
+$('angles').addEventListener('change', e => { showAngles = e.target.checked; });
+function syncPhi() { $('phi').value = Math.round(follow.phi / D); $('phi-o').textContent = fmtDeg(follow.phi).replace('.0', ''); }
+$('phi').addEventListener('input', e => { follow.phi = e.target.value * D; syncPhi(); });
+function setSolver(s) {
+  solver = s;
+  $('s-analytic').setAttribute('aria-pressed', s === 'analytic'); $('s-gnn').setAttribute('aria-pressed', s === 'gnn');
+  $('gnn-note').textContent = s === 'gnn'
+    ? `Graph network (${GNN.params.toLocaleString()} weights) predicts the joint angles. Dashed outline: the exact closed-form pose for the same target.`
+    : 'Closed-form trigonometry solves the joint angles exactly.';
+}
+$('s-analytic').addEventListener('click', () => setSolver('analytic'));
+$('s-gnn').addEventListener('click', () => setSolver('gnn'));
+if (!GNN) { $('s-gnn').disabled = true; $('s-gnn').title = 'No weights found: run gnn/train.py and gnn/export.py'; }
+function toggleGrip() { arm.gTgt = (arm.held || arm.gTgt < 0.5) ? 1 : 0; }
+$('grip-f').addEventListener('click', toggleGrip);
+function syncJog() {
+  ['j1', 'j2', 'j3'].forEach((id, i) => { const v = +$(id).value; arm.tgt[i] = v * D; $(id + '-o').textContent = fmtDeg(v * D); });
+  arm.gTgt = $('jg').value / 100; $('jg-o').textContent = $('jg').value + ' %';
+}
+['j1', 'j2', 'j3', 'jg'].forEach(id => $(id).addEventListener('input', syncJog));
+document.addEventListener('keydown', e => {
+  if (e.code !== 'Space' || /INPUT|BUTTON|TEXTAREA|SELECT/.test(e.target.tagName)) return;
+  e.preventDefault();
+  if (mode === 'follow') toggleGrip(); else if (mode === 'program') $('run').click();
+});
+
+// ---------- canvas ----------
+const cv = $('cell'), cx = cv.getContext('2d');
+const tv = $('trace'), tx = tv.getContext('2d');
+let VW = 0, VH = 0, sc = 1, ox = 0, oy = 0, dpr = 1, TW = 0, TH = 0;
+const BOTTOM = 42;
+function fit() {
+  dpr = Math.min(2, window.devicePixelRatio || 1);
+  const r = cv.getBoundingClientRect(); VW = r.width; VH = r.height;
+  cv.width = Math.round(VW * dpr); cv.height = Math.round(VH * dpr);
+  sc = Math.min((VW - 16) / 1120, (VH - BOTTOM - 8) / 800);
+  ox = (VW - 1120 * sc) / 2 + 260 * sc; oy = VH - BOTTOM;
+  const t = tv.getBoundingClientRect(); TW = t.width; TH = t.height;
+  tv.width = Math.round(TW * dpr); tv.height = Math.round(TH * dpr);
+}
+new ResizeObserver(fit).observe(cellWrap); new ResizeObserver(fit).observe(tv);
+const S = p => [ox + p.x * sc, oy - p.y * sc];
+
+let C = {};
+function readTokens() {
+  const cs = getComputedStyle(document.documentElement), g = n => cs.getPropertyValue('--' + n).trim();
+  C = {}; ['panel', 'fg', 'muted', 'line', 'grid', 'arm', 'arm-edge', 'joint', 'steel', 'block', 'block-edge', 'block-ink', 'pad', 'alert', 'live', 'q1', 'q2', 'q3']
+    .forEach(n => C[n] = g(n));
+}
+readTokens();
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change', readTokens);
+new MutationObserver(readTokens).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+const MONO = '"JetBrains Mono", ui-monospace, monospace', DISP = '"Barlow Condensed", "Arial Narrow", sans-serif';
+
+function capsule(p0, p1, r0, r1) {
+  const [x0, y0] = S(p0), [x1, y1] = S(p1), a = Math.atan2(y1 - y0, x1 - x0);
+  cx.beginPath();
+  cx.arc(x0, y0, r0 * sc, a + Math.PI / 2, a + 1.5 * Math.PI);
+  cx.arc(x1, y1, r1 * sc, a - Math.PI / 2, a + Math.PI / 2);
+  cx.closePath();
+}
+function quad(o, u, n, a0, a1, b0, b1) {
+  const P = (a, b) => S({ x: o.x + u.x * a + n.x * b, y: o.y + u.y * a + n.y * b });
+  cx.beginPath(); [P(a0, b0), P(a1, b0), P(a1, b1), P(a0, b1)].forEach(([x, y], i) => i ? cx.lineTo(x, y) : cx.moveTo(x, y)); cx.closePath();
+}
+function cap(p, r, inner) {
+  const [x, y] = S(p);
+  cx.fillStyle = C.joint; cx.beginPath(); cx.arc(x, y, r * sc, 0, 7); cx.fill();
+  cx.strokeStyle = C.arm; cx.lineWidth = Math.max(1, 2.2 * sc); cx.beginPath(); cx.arc(x, y, inner * sc, 0, 7); cx.stroke();
+  cx.fillStyle = C.arm; cx.beginPath(); cx.arc(x, y, Math.max(1.5, 6 * sc), 0, 7); cx.fill();
+}
+function link(p0, p1, r0, r1) {
+  capsule(p0, p1, r0, r1);
+  cx.fillStyle = C.arm; cx.fill(); cx.strokeStyle = C['arm-edge']; cx.lineWidth = 1.2; cx.stroke();
+  // panel seam along the link
+  const dx = p1.x - p0.x, dy = p1.y - p0.y, L = Math.hypot(dx, dy), ux = dx / L, uy = dy / L, off = Math.min(r0, r1) * 0.45;
+  const a = S({ x: p0.x + ux * r0 * 1.4 - uy * off, y: p0.y + uy * r0 * 1.4 + ux * off });
+  const b = S({ x: p1.x - ux * r1 * 1.4 - uy * off, y: p1.y - uy * r1 * 1.4 + ux * off });
+  cx.globalAlpha = 0.35; cx.beginPath(); cx.moveTo(...a); cx.lineTo(...b); cx.stroke(); cx.globalAlpha = 1;
+}
+function angleArc(p, ref, ang, r, label, col) {
+  const [X, Y] = S(p), R = r * sc;
+  cx.strokeStyle = col; cx.fillStyle = col; cx.lineWidth = 1.3;
+  cx.setLineDash([3, 3]); cx.beginPath(); cx.moveTo(X, Y); cx.lineTo(X + Math.cos(-ref) * (R + 12), Y + Math.sin(-ref) * (R + 12)); cx.stroke(); cx.setLineDash([]);
+  cx.beginPath(); cx.arc(X, Y, R, -ref, -(ref + ang), ang > 0); cx.stroke();
+  const m = -(ref + ang / 2), lr = R + 14;
+  cx.font = `500 11px ${MONO}`; cx.textAlign = 'center'; cx.textBaseline = 'middle';
+  cx.fillText(label, X + Math.cos(m) * lr * 1.25, Y + Math.sin(m) * lr);
+}
+
+const trail = [];
+function draw(now) {
+  cx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  cx.fillStyle = C.panel; cx.fillRect(0, 0, VW, VH);
+  // grid
+  cx.lineWidth = 1;
+  for (let x = -250; x <= 850; x += 50) {
+    const [X] = S({ x, y: 0 }); cx.strokeStyle = C.grid; cx.globalAlpha = x % 100 ? 0.5 : 1;
+    cx.beginPath(); cx.moveTo(X + .5, 0); cx.lineTo(X + .5, oy); cx.stroke();
+  }
+  for (let z = 50; oy - z * sc > 0; z += 50) {
+    const [, Y] = S({ x: 0, y: z }); cx.strokeStyle = C.grid; cx.globalAlpha = z % 100 ? 0.5 : 1;
+    cx.beginPath(); cx.moveTo(0, Y + .5); cx.lineTo(VW, Y + .5); cx.stroke();
+  }
+  cx.globalAlpha = 1;
+  cx.fillStyle = C.muted; cx.font = `10px ${MONO}`; cx.textBaseline = 'middle'; cx.textAlign = 'left';
+  for (let z = 100; oy - z * sc > 10; z += 100) { const [, Y] = S({ x: 0, y: z }); cx.fillText('Z' + z, 4, Y - 7); }
+  cx.textAlign = 'center'; cx.textBaseline = 'top';
+  for (let x = -200; x <= 800; x += 100) { const [X] = S({ x, y: 0 }); cx.fillText(x, X, oy + 26); }
+
+  // reach envelope (TCP max reach)
+  const [shX, shY] = S(SH), R = (L1 + L2 + L3) * sc;
+  cx.save(); cx.beginPath(); cx.rect(0, 0, VW, oy); cx.clip();
+  cx.strokeStyle = C.muted; cx.globalAlpha = 0.55; cx.setLineDash([5, 6]); cx.lineWidth = 1;
+  cx.beginPath(); cx.arc(shX, shY, R, 0, 7); cx.stroke(); cx.setLineDash([]);
+  const la = -32 * D; cx.globalAlpha = 0.9; cx.fillStyle = C.muted; cx.font = `10px ${MONO}`; cx.textAlign = 'left'; cx.textBaseline = 'bottom';
+  cx.fillText('max reach 780', shX + Math.cos(la) * R + 6, shY + Math.sin(la) * R);
+  cx.restore();
+
+  // floor + stations
+  cx.strokeStyle = C.fg; cx.lineWidth = 1.5; cx.beginPath(); cx.moveTo(0, oy); cx.lineTo(VW, oy); cx.stroke();
+  cx.save(); cx.beginPath(); cx.rect(0, oy, VW, 8); cx.clip(); cx.strokeStyle = C.muted; cx.lineWidth = 1; cx.globalAlpha = .6;
+  cx.beginPath(); for (let X = 0; X < VW + 10; X += 8) { cx.moveTo(X, oy); cx.lineTo(X - 8, oy + 8); } cx.stroke(); cx.restore();
+  for (const k of ['A', 'B']) {
+    const [X] = S({ x: STN[k].x, y: 0 });
+    cx.fillStyle = C.pad; cx.fillRect(X - 50 * sc, oy - 3, 100 * sc, 3);
+    cx.fillStyle = C.fg; cx.font = `600 12px ${DISP}`; cx.textAlign = 'center'; cx.textBaseline = 'top';
+    cx.fillText('STN ' + k, X, oy + 10);
+  }
+
+  // planned waypoints in program mode
+  if (mode === 'program') {
+    cx.fillStyle = C.muted; cx.strokeStyle = C.muted; cx.lineWidth = 1; cx.font = `10px ${MONO}`; cx.textAlign = 'left'; cx.textBaseline = 'middle';
+    const seen = new Set();
+    prog.lines.forEach((l, i) => {
+      if (l.op === 'GRIP') return; const key = l.x + ',' + l.z; if (seen.has(key)) return; seen.add(key);
+      const [X, Y] = S({ x: l.x, y: l.z }), s = 4;
+      cx.globalAlpha = i === prog.pc ? 1 : .6;
+      cx.beginPath(); cx.moveTo(X, Y - s); cx.lineTo(X + s, Y); cx.lineTo(X, Y + s); cx.lineTo(X - s, Y); cx.closePath(); cx.stroke();
+      if (l.z === SAFE) cx.fillText(l.name, X + 8, Y - 10);
+    });
+    cx.globalAlpha = 1;
+  }
+
+  // TCP trail
+  for (let i = 1; i < trail.length; i++) {
+    const a = trail[i - 1], b = trail[i], age = (now - b.t) / 2500;
+    cx.strokeStyle = C.live; cx.globalAlpha = Math.max(0, 1 - age) * .8; cx.lineWidth = 1.6;
+    cx.beginPath(); cx.moveTo(...S(a)); cx.lineTo(...S(b)); cx.stroke();
+  }
+  cx.globalAlpha = 1;
+
+  // parts
+  for (const b of blocks) {
+    const [X, Y] = S(b), s = BS * sc;
+    cx.save(); cx.translate(X, Y); cx.rotate(-b.ang);
+    cx.fillStyle = C.block; cx.strokeStyle = C['block-edge']; cx.lineWidth = 1.2;
+    cx.fillRect(-s / 2, -s / 2, s, s); cx.strokeRect(-s / 2 + .5, -s / 2 + .5, s - 1, s - 1);
+    cx.fillStyle = C['block-ink']; cx.font = `500 ${Math.max(9, 16 * sc)}px ${MONO}`; cx.textAlign = 'center'; cx.textBaseline = 'middle';
+    cx.fillText(b.id, 0, 1); cx.restore();
+  }
+
+  // arm
+  const k = fk(arm.q);
+  cx.fillStyle = C.joint;
+  cx.beginPath(); [[-80, 0], [80, 0], [52, SH.y - 30], [-52, SH.y - 30]].map(([x, y]) => S({ x, y })).forEach(([x, y], i) => i ? cx.lineTo(x, y) : cx.moveTo(x, y)); cx.closePath(); cx.fill();
+  { const [x, y] = S({ x: -105, y: 16 }); cx.fillRect(x, y, 210 * sc, 16 * sc); }
+  link(k.s, k.e, 36, 27);
+  cap(k.s, 44, 28);
+  link(k.e, k.w, 26, 18);
+  cap(k.e, 31, 19);
+
+  const u = { x: Math.cos(k.a3), y: Math.sin(k.a3) }, n = { x: -u.y, y: u.x }, hw = halfW(arm.g);
+  const rodEnd = { x: k.w.x + u.x * (L3 - 68), y: k.w.y + u.y * (L3 - 68) };
+  capsule(k.w, rodEnd, 14, 12); cx.fillStyle = C.joint; cx.fill();
+  quad(k.w, u, n, L3 - 72, L3 - 52, -74, 74); cx.fillStyle = C.joint; cx.fill();
+  for (const sgn of [-1, 1]) {
+    quad(k.w, u, n, L3 - 56, L3 + 18, sgn * hw, sgn * (hw + 12));
+    cx.fillStyle = C.steel; cx.fill(); cx.strokeStyle = C.joint; cx.lineWidth = 1; cx.stroke();
+  }
+  cap(k.w, 21, 12);
+  { const [X, Y] = S(k.t); cx.strokeStyle = C.alert; cx.lineWidth = 1.2; cx.beginPath(); cx.moveTo(X - 5, Y); cx.lineTo(X + 5, Y); cx.moveTo(X, Y - 5); cx.lineTo(X, Y + 5); cx.stroke(); }
+
+  if (ghostQ) {
+    const g = fk(ghostQ), pts = [g.s, g.e, g.w, g.t].map(S);
+    cx.strokeStyle = C.fg; cx.globalAlpha = 0.55; cx.lineWidth = 1.5; cx.setLineDash([6, 5]);
+    cx.beginPath(); pts.forEach(([x, y], i) => i ? cx.lineTo(x, y) : cx.moveTo(x, y)); cx.stroke(); cx.setLineDash([]);
+    pts.forEach(([x, y]) => { cx.beginPath(); cx.arc(x, y, 3.5, 0, 7); cx.stroke(); });
+    cx.globalAlpha = 1;
+  }
+
+  if (showAngles) {
+    angleArc(k.s, 0, arm.q[0], 92, 'A1 ' + fmtDeg(arm.q[0]), C.q1);
+    angleArc(k.e, k.a1, arm.q[1], 70, 'A2 ' + fmtDeg(arm.q[1]), C.q2);
+    angleArc(k.w, k.a2, arm.q[2], 52, 'A3 ' + fmtDeg(arm.q[2]), C.q3);
+  }
+
+  if (mode === 'follow') {
+    const [X, Y] = S({ x: follow.x, y: Math.max(follow.y, 25) }), col = follow.reach ? C.live : C.alert;
+    cx.strokeStyle = col; cx.lineWidth = 1.5; cx.beginPath(); cx.arc(X, Y, 11, 0, 7);
+    cx.moveTo(X - 18, Y); cx.lineTo(X - 6, Y); cx.moveTo(X + 6, Y); cx.lineTo(X + 18, Y);
+    cx.moveTo(X, Y - 18); cx.lineTo(X, Y - 6); cx.moveTo(X, Y + 6); cx.lineTo(X, Y + 18); cx.stroke();
+    if (!follow.reach) { cx.fillStyle = col; cx.font = `500 11px ${MONO}`; cx.textAlign = 'left'; cx.textBaseline = 'bottom'; cx.fillText('out of reach', X + 14, Y - 12); }
+  }
+}
+
+// joint trace
+const TRN = 240, hist = [];
+function drawTrace() {
+  const c = tx; c.setTransform(dpr, 0, 0, dpr, 0, 0); c.clearRect(0, 0, TW, TH);
+  const L = 38, Rp = 6, T = 6, B = 18, pw = TW - L - Rp, ph = TH - T - B;
+  const y = v => T + (210 - v) / 400 * ph;
+  c.font = `10px ${MONO}`; c.textAlign = 'right'; c.textBaseline = 'middle';
+  for (const v of [-180, -90, 0, 90, 180]) {
+    c.strokeStyle = C.grid; c.lineWidth = 1; c.globalAlpha = v === 0 ? 1 : .8;
+    c.beginPath(); c.moveTo(L, Math.round(y(v)) + .5); c.lineTo(L + pw, Math.round(y(v)) + .5); c.stroke();
+    c.globalAlpha = 1; c.fillStyle = C.muted; c.fillText((v < 0 ? '−' : '') + Math.abs(v) + '°', L - 6, y(v));
+  }
+  c.textBaseline = 'top'; c.textAlign = 'left'; c.fillText('−8 s', L, T + ph + 5); c.textAlign = 'right'; c.fillText('now', L + pw, T + ph + 5);
+  const off = TRN - hist.length;
+  ['q1', 'q2', 'q3'].forEach((key, j) => {
+    c.strokeStyle = C[key]; c.lineWidth = 1.8; c.lineJoin = 'round'; c.beginPath();
+    hist.forEach((s, i) => { const X = L + (off + i) / (TRN - 1) * pw, Y = y(s[j]); i ? c.lineTo(X, Y) : c.moveTo(X, Y); });
+    c.stroke();
+    if (hist.length) { const s = hist[hist.length - 1]; c.fillStyle = C[key]; c.beginPath(); c.arc(L + pw, y(s[j]), 3, 0, 7); c.fill(); }
+  });
+}
+
+// pointer control (follow mode)
+let down = null;
+function setTarget(e) {
+  const r = cv.getBoundingClientRect();
+  follow.x = (e.clientX - r.left - ox) / sc; follow.y = (oy - (e.clientY - r.top)) / sc;
+}
+cv.addEventListener('pointerdown', e => { if (mode !== 'follow') return; setTarget(e); down = { x: e.clientX, y: e.clientY }; cv.setPointerCapture(e.pointerId); });
+cv.addEventListener('pointermove', e => { if (mode === 'follow' && (e.pointerType === 'mouse' || down)) setTarget(e); });
+cv.addEventListener('pointerup', e => {
+  if (mode !== 'follow' || !down) return;
+  if (Math.hypot(e.clientX - down.x, e.clientY - down.y) < 6) toggleGrip();
+  down = null;
+});
+cv.addEventListener('pointercancel', () => { down = null; });
+cv.addEventListener('wheel', e => {
+  if (mode !== 'follow') return; e.preventDefault();
+  follow.phi = clamp(follow.phi + Math.sign(e.deltaY) * 5 * D, -Math.PI, Math.PI); syncPhi();
+}, { passive: false });
+
+// telemetry
+let spd = 0, lastT = null, teleAcc = 0;
+function tele() {
+  const k = fk(arm.q);
+  $('t-a1').textContent = fmtDeg(arm.q[0]); $('t-a2').textContent = fmtDeg(arm.q[1]); $('t-a3').textContent = fmtDeg(arm.q[2]);
+  $('t-x').textContent = fmtMm(k.t.x) + ' mm'; $('t-z').textContent = fmtMm(k.t.y) + ' mm';
+  $('t-phi').textContent = fmtDeg(wrapPi(k.a3));
+  $('t-g').textContent = arm.held ? `holding ${arm.held.id}` : (arm.g > 0.98 ? 'open' : arm.g < 0.02 ? 'closed' : Math.round(arm.g * 100) + ' %');
+  $('t-v').textContent = Math.round(spd) + ' mm/s';
+  $('t-c').textContent = prog.cycles;
+  const reach = mode === 'follow' ? follow.reach : true;
+  $('t-r').textContent = reach ? 'OK' : 'LIMIT'; $('t-r').classList.toggle('warn', !reach);
+  const useGnn = solver === 'gnn' && mode !== 'jog';
+  $('t-ike').textContent = useGnn ? ikErr.toFixed(2) + ' mm' : (solver === 'gnn' ? 'not used in jog' : 'exact');
+  $('t-ikt').textContent = useGnn ? ikMs.toFixed(2) + ' ms' : '–';
+  if (mode === 'jog' || solver !== 'gnn') ghostQ = null;
+  const pill = $('pill');
+  if (mode === 'program') { pill.dataset.s = prog.running ? 'run' : 'pause'; pill.textContent = prog.running ? 'RUN · AUTO' : 'PAUSED'; }
+  else if (mode === 'follow') { pill.dataset.s = reach ? 'live' : 'alert'; pill.textContent = reach ? 'FOLLOW' : 'OUT OF REACH'; }
+  else { pill.dataset.s = 'live'; pill.textContent = 'JOG · MANUAL'; }
+  if (mode === 'follow') $('grip-f').textContent = (arm.held || arm.gTgt < 0.5) ? 'Open gripper' : 'Close gripper';
+}
+
+// main loop
+let last = performance.now(), acc = 0, sampleT = 0;
+function frame(now) {
+  const dt = Math.min(0.05, (now - last) / 1000); last = now;
+  if (mode === 'follow') { const r = ik(follow.x, Math.max(follow.y, 25), follow.phi); arm.tgt = r.q; follow.reach = r.reach; }
+  acc += dt; const H = 1 / 240;
+  while (acc >= H) {
+    driveJoints(H);
+    if (mode === 'program') stepProgram(H);
+    updateGrip(H); syncHeld(); updateBlocks(H);
+    acc -= H; sampleT += H;
+    if (sampleT >= 1 / 30) { sampleT -= 1 / 30; hist.push(arm.q.map(q => q / D)); if (hist.length > TRN) hist.shift(); }
+  }
+  const t = fk(arm.q).t;
+  if (lastT && dt > 0) spd += (Math.hypot(t.x - lastT.x, t.y - lastT.y) / dt - spd) * 0.15;
+  lastT = t;
+  trail.push({ x: t.x, y: t.y, t: now }); while (trail.length && now - trail[0].t > 2500) trail.shift();
+  if (VW) { draw(now); drawTrace(); }
+  teleAcc += dt; if (teleAcc > 0.1) { teleAcc = 0; tele(); }
+  requestAnimationFrame(frame);
+}
+
+fit();
+setMode('program');
+prog.running = !reduce; $('run').textContent = prog.running ? 'Pause' : 'Run';
+for (let i = 0; i < 3; i++) arm.q[i] = arm.tgt[i] = [100 * D, -110 * D, -80 * D][i];
+tele();
+requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
