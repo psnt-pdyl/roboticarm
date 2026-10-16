@@ -60,6 +60,28 @@ it was trained on. The loss is Huber rather than squared error: when the arm hid
 the part, the miss can be hundreds of mm, and a squared loss lets that one scene
 derail training.
 
+## The motion PINN
+
+`pinn/` trains a physics-informed network that shapes the arm's joint moves. The page's
+arm has no masses of its own, so `pinn/dynamics.py` gives it a body (links of 6, 4 and
+1.5 kg, motor limits of 80, 30 and 6 N·m, a 0.4 kg part) and computes motor torques
+with Newton–Euler equations, checked against a Lagrangian derivation.
+
+The network takes a start pose, an end pose, the move's duration, the payload and a
+time t, and returns the joint angles at t. Its form makes the start and end exact (right
+poses, zero speed and acceleration), so it only shapes the path between. It is trained
+with no example motions: velocities and accelerations come from autograd through t,
+the equations of motion turn them into torques, and the loss is motor effort
+(Σ (τ / τ_max)²) plus stiff penalties for exceeding torque limits, coming within 1° of a
+joint limit, or bringing the elbow, wrist or tool within 20 mm of the floor.
+
+In the page, **Joint-move motion: PINN** makes every joint move follow the network for
+the same duration the joint blend would take; with the GNN solver on, the GNN still
+commands each step from the PINN's pose. Moves shorter than 0.15 s stay a blend: the
+network's small path correction, squeezed into so little time, would need huge torques.
+The telemetry shows motor torque as a percentage of each limit, live and as the peak of
+the last joint move.
+
 ## Setup
 
 The venv lives on the home drive because this USB drive is exFAT, which can't
@@ -89,6 +111,15 @@ cd vision
 ~/.venvs/robotic-arm-simulation/bin/python train.py --device cuda   # writes vision_net.pt
 ~/.venvs/robotic-arm-simulation/bin/python evaluate.py              # writes eval.json
 ~/.venvs/robotic-arm-simulation/bin/python export.py                # writes ../vision-weights.js
+```
+
+The motion PINN (about 15 minutes on an RTX 4090):
+
+```bash
+cd pinn
+python train.py --device cuda   # writes pinn.pt, train_history.json
+python evaluate.py              # writes eval.json, example_move.png (compares blend, PINN, per-move optimum)
+python export.py                # writes ../pinn-weights.js
 ```
 
 Training runs on the CPU by default. The first CUDA calculation on this laptop's
@@ -121,6 +152,12 @@ disk, some browsers block the scripts. From the project folder:
 | `vision/train.py` | Training loop |
 | `vision/evaluate.py` | Position error on unseen scenes, and share close enough to grip |
 | `vision/export.py` | Weight and camera export for the web page |
+| `pinn-weights.js` | Exported motion PINN and the arm's physics constants (generated) |
+| `pinn/dynamics.py` | Masses, torque limits, Newton–Euler inverse dynamics, the page's joint blend |
+| `pinn/model.py` | The motion PINN: q(t) with exact start and end, derivatives by autograd |
+| `pinn/train.py` | Physics-only training loop and loss |
+| `pinn/evaluate.py` | Blend vs PINN vs per-move optimum, on random and page moves |
+| `pinn/export.py` | Weight and physics export for the web page |
 | `CHAT.md` | Cleaned log of the Claude Code session that built this project |
 
 ## Results
@@ -130,7 +167,19 @@ The default 30k-step run, evaluated on 200,000 unseen targets: gripper error
 0.06° mean. Every pick-and-place waypoint is within 0.25 mm. Inference in the
 browser takes about 3 ms.
 
-The vision network, on 10,000 unseen scenes: position error 0.28 mm mean, 0.70 mm
+The motion PINN, on 1,000 unseen moves (50–200 % speed, 0–1 kg payload), against the
+joint blend over the same durations: 25 % less motor effort, no move past a joint limit
+or into the floor (the blend drives the arm into the floor on 3 % of these moves, up to
+315 mm deep), and torque limits exceeded on 0.2 % of moves (blend 0.4 %). Peak torque is
+higher, 65 % of the limit on average against 54 %: the network trades a sharper moment
+for an easy middle of the move, where it typically holds the arm upright, balanced over
+the shoulder. A per-move optimisation of the same loss reaches 39 % less effort, so the
+single network is 21 % above the optimum, and it answers 1,000 moves in 0.3 s where the
+optimisation takes about 90 s. On the page's own moves at 100 % speed it saves 18–43 %;
+on very short, fast moves (0.4 s) it uses more effort than the blend, because it starts
+and stops without a torque jump.
+
+The 2D vision network, on 10,000 unseen scenes: position error 0.28 mm mean, 0.70 mm
 p95, 10.4 mm max; every part found close enough to grip (the gripper catches a part
 within 22 mm). With lighting and noise variation added it stays at 0.39 mm mean, with
 3 in 10,000 out of reach of the gripper, all pale parts on a background lit to almost

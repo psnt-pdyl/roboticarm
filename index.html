@@ -192,6 +192,15 @@ button:focus-visible,input:focus-visible{outline:2px solid var(--live);outline-o
       </div>
 
       <div class="sec">
+        <div class="label">Joint-move motion</div>
+        <div class="seg" role="group" aria-label="How joint moves are shaped">
+          <button id="mo-blend" aria-pressed="true">Joint blend</button>
+          <button id="mo-pinn" aria-pressed="false">PINN</button>
+        </div>
+        <p class="note" id="mo-note"></p>
+      </div>
+
+      <div class="sec">
         <div class="label">Telemetry</div>
         <dl class="tele">
           <div><dt>A1</dt><dd id="t-a1">–</dd></div>
@@ -209,6 +218,8 @@ button:focus-visible,input:focus-visible{outline:2px solid var(--live);outline-o
           <div><dt>GNN calls</dt><dd id="t-ikr">–</dd></div>
           <div><dt>Vision error</dt><dd id="t-ve">–</dd></div>
           <div><dt>Vision time</dt><dd id="t-vt">–</dd></div>
+          <div><dt>Motor torque</dt><dd id="t-tq">–</dd></div>
+          <div><dt>Peak, last joint move</dt><dd id="t-tp">–</dd></div>
         </dl>
       </div>
     </aside>
@@ -217,6 +228,7 @@ button:focus-visible,input:focus-visible{outline:2px solid var(--live);outline-o
 
 <script src="ik-gnn-weights.js"></script>
 <script src="vision-weights.js"></script>
+<script src="pinn-weights.js"></script>
 <script>
 (() => {
 const D = Math.PI / 180;
@@ -390,7 +402,84 @@ const VISION = (() => {
   return { capture, forward, cam };
 })();
 
+// Motion PINN (weights and arm physics from pinn/export.py). Same model as pinn/model.py:
+// q(s) = q0 + (q1 - q0) b(s) + w(s) N(...), with N an MLP trained on the equations of motion alone.
+const PINN = (() => {
+  const W = window.MOTION_PINN; if (!W) return null;
+  const T = decodeTensors(W.tensors), P = W.physics, qm = T.q_mid.d, qh = T.q_half.d;
+  const lin = (name, x) => {
+    const w = T[name + '.weight'], b = T[name + '.bias'], [o, n] = w.s, out = new Float32Array(o);
+    for (let i = 0; i < o; i++) { let s = b.d[i]; const r = i * n; for (let j = 0; j < n; j++) s += w.d[r + j] * x[j]; out[i] = s; }
+    return out;
+  };
+  // Joint angles at s = t / T in [0, 1] of a rest-to-rest move from q0 to q1 taking T seconds with a payload (kg).
+  function at(q0, q1, s, Tm, payload) {
+    let x = [0, 1, 2].map(i => (q0[i] - qm[i]) / qh[i]).concat([0, 1, 2].map(i => (q1[i] - q0[i]) / qh[i]),
+      [2 * s - 1, Math.log(Tm / P.t_ref), payload]);
+    for (let l = 0; l < W.layers; l++) { x = lin(`layers.${l}`, x); for (let i = 0; i < x.length; i++) x[i] = x[i] / (1 + Math.exp(-x[i])); }
+    const N = lin('out', x), b = 10 * s ** 3 - 15 * s ** 4 + 6 * s ** 5, w = 64 * s ** 3 * (1 - s) ** 3;
+    return [0, 1, 2].map(i => q0[i] + (q1[i] - q0[i]) * b + w * N[i]);
+  }
+  return { at, physics: P };
+})();
+// The page's joint-move time: each joint's speed/acceleration trapezoid, the slowest one wins.
+function moveTime(q0, q1) {
+  let T = 0;
+  for (let i = 0; i < 3; i++) {
+    const v = VMAX[i] * override, a = AMAX[i] * override, d = Math.abs(q1[i] - q0[i]);
+    T = Math.max(T, d >= v * v / a ? d / v + v / a : 2 * Math.sqrt(d / a));
+  }
+  return Math.max(T, PINN.physics.t_min);
+}
+// Motor torques (N m) from joint angles, velocities, accelerations and payload: planar Newton-Euler,
+// the same equations as inverse_dynamics() in pinn/dynamics.py.
+function motorTorques(q, qd, qdd, payload) {
+  const { len: Ln, mass: m, com: c, inertia: In, g } = PINN.physics;
+  let a = 0, ad = 0, add = 0;
+  const u = [], rel = [], acc = [];
+  for (let k = 0; k < 3; k++) {
+    a += q[k]; ad += qd[k]; add += qdd[k]; acc.push(add);
+    const cs = Math.cos(a), sn = Math.sin(a);
+    u.push([cs, sn]); rel.push([-add * sn - ad * ad * cs, add * cs - ad * ad * sn]);
+  }
+  const p = [[0, 0]];
+  for (let k = 0; k < 3; k++) p.push([p[k][0] + Ln[k] * rel[k][0], p[k][1] + Ln[k] * rel[k][1]]);
+  let F = [payload * p[3][0], payload * (p[3][1] + g)], tn = 0;
+  const tau = [0, 0, 0], cross = (r, f) => r[0] * f[1] - r[1] * f[0];
+  for (let k = 2; k >= 0; k--) {
+    const Fk = [m[k] * (p[k][0] + c[k] * rel[k][0]) + F[0], m[k] * (p[k][1] + c[k] * rel[k][1] + g) + F[1]];
+    tau[k] = In[k] * acc[k] + tn + c[k] * cross(u[k], Fk) + (Ln[k] - c[k]) * cross(u[k], F);
+    F = Fk; tn = tau[k];
+  }
+  return tau;
+}
+
 let solver = 'analytic', ikErr = 0, ikMs = 0, ghostQ = null, ikCalls = 0, rateT0 = performance.now();
+let motion = 'blend';
+const torque = { hist: [], now: null }, peak = { cur: { v: 0, j: 0 }, last: null };
+// Joint angles for a planned pose, via the GNN from where that pose puts the gripper.
+function gnnTrack(qp) {
+  const k = fk(qp), e = qp[1], side = e >= 0 ? 1 : -1, BAND = 6 * D;
+  let q = gnnSolve(k.t.x, k.t.y, k.a3, side);
+  // Near a straight arm the network holds the elbow a few degrees off straight on each branch,
+  // so flipping branches would jump ~7 degrees in one step. Blend both answers across the flip.
+  if (Math.abs(e) < BAND) {
+    const qo = gnnSolve(k.t.x, k.t.y, k.a3, -side), w = 0.5 - 0.5 * Math.abs(e) / BAND;
+    q = q.map((v, i) => v * (1 - w) + qo[i] * w);
+    const kq = fk(q); ikErr = Math.hypot(kq.t.x - k.t.x, kq.t.y - k.t.y);
+  }
+  return q;
+}
+// Motor torques from the last three control steps of the motion (finite differences).
+function trackTorque(q, h) {
+  const H = torque.hist; if (!H.length) H.push(q.slice(), q.slice());
+  H.push(q.slice()); if (H.length > 3) H.shift();
+  if (H.length < 3 || !PINN) return;
+  const [a, b, c] = H, qd = c.map((v, i) => (v - b[i]) / h), qdd = c.map((v, i) => (v - 2 * b[i] + a[i]) / (h * h));
+  torque.now = motorTorques(c, qd, qdd, arm.held ? PINN.physics.part_mass : 0).map((t, i) => t / PINN.physics.tau_max[i]);
+  if (prog.ph && prog.lines[prog.pc] && prog.lines[prog.pc].op === 'PTP')
+    torque.now.forEach((r, j) => { if (Math.abs(r) > peak.cur.v) peak.cur = { v: Math.abs(r), j }; });
+}
 // One GNN prediction: joint angles for a reachable gripper pose on the given elbow branch.
 function gnnSolve(gx, gy, phi, elbow) {
   const t0 = performance.now();
@@ -568,11 +657,15 @@ function stepProgram(h) {
   if (!prog.ph) {
     const ph = {};
     if (ln.op === 'PTP') {
+      // The planned motion is the joint blend or the PINN; with the GNN solver, the arm is then
+      // commanded with what the GNN predicts for each moment's gripper pose, every step.
       const tgt = ik(ln.x, ln.z, PHI_DOWN).q;
-      // With the GNN, a joint move is still planned by blending joints to the end pose, but the
-      // arm is commanded with what the GNN predicts for each moment's gripper pose, every step.
-      if (solver === 'gnn' && GNN) { ph.plan = { q: arm.q.slice(), v: arm.v.slice(), tgt }; arm.tgt = arm.q.slice(); arm.v = [0, 0, 0]; }
-      else arm.tgt = tgt;
+      ph.plan = { q: arm.q.slice(), v: arm.v.slice(), tgt };
+      // Moves under 0.15 s (a couple of degrees, e.g. re-parking where the arm already is) stay a blend:
+      // the network's small path correction, squeezed into so little time, would need huge torques.
+      const T = motion === 'pinn' && PINN ? moveTime(arm.q, tgt) : 0;
+      if (T >= 0.15) ph.pinn = { q0: arm.q.slice(), T, m: arm.held ? PINN.physics.part_mass : 0, t: 0 };
+      arm.tgt = arm.q.slice(); arm.v = [0, 0, 0]; peak.cur = { v: 0, j: 0 };
     }
     else if (ln.op === 'LIN') { const t = fk(arm.q).t; ph.x0 = t.x; ph.z0 = t.y; ph.L = Math.hypot(ln.x - t.x, ln.z - t.y); ph.s = 0; ph.v = 0; }
     else if (ln.op === 'LOOK') ph.t = 0;
@@ -580,20 +673,17 @@ function stepProgram(h) {
     prog.ph = ph; renderCursor();
   }
   const ph = prog.ph; let done = false;
-  if (ln.op === 'PTP' && ph.plan) {
-    const p = ph.plan; driveJoints(h, p);
-    const k = fk(p.q), e = p.q[1], side = e >= 0 ? 1 : -1, BAND = 6 * D;
-    let q = gnnSolve(k.t.x, k.t.y, k.a3, side);
-    // Near a straight arm the network holds the elbow a few degrees off straight on each branch,
-    // so flipping branches would jump ~7 degrees in one step. Blend both answers across the flip.
-    if (Math.abs(e) < BAND) {
-      const qo = gnnSolve(k.t.x, k.t.y, k.a3, -side), w = 0.5 - 0.5 * Math.abs(e) / BAND;
-      q = q.map((v, i) => v * (1 - w) + qo[i] * w);
-      const kq = fk(q); ikErr = Math.hypot(kq.t.x - k.t.x, kq.t.y - k.t.y);
-    }
-    arm.q = q; arm.tgt = q.slice(); arm.v = [0, 0, 0]; ghostQ = p.q.slice();
-    done = settled(p);
-  } else if (ln.op === 'PTP') done = settled();
+  if (ln.op === 'PTP') {
+    const p = ph.plan;
+    if (ph.pinn) {
+      const m = ph.pinn; m.t = Math.min(m.T, m.t + h);
+      p.q = PINN.at(m.q0, p.tgt, m.t / m.T, m.T, m.m); done = m.t >= m.T;
+    } else { driveJoints(h, p); done = settled(p); }
+    const q = solver === 'gnn' && GNN ? gnnTrack(p.q) : p.q.slice();
+    arm.q = q; arm.tgt = q.slice(); arm.v = [0, 0, 0];
+    ghostQ = solver === 'gnn' && GNN ? p.q.slice() : null;
+    if (done) peak.last = peak.cur;
+  }
   else if (ln.op === 'LIN') {
     const vmax = ln.v * override, a = 1200 * override, rem = ph.L - ph.s;
     const vdes = Math.min(vmax, Math.sqrt(2 * a * Math.max(rem, 0)));
@@ -695,6 +785,17 @@ function setSolver(s) {
 }
 $('s-analytic').addEventListener('click', () => setSolver('analytic'));
 $('s-gnn').addEventListener('click', () => setSolver('gnn'));
+function setMotion(m) {
+  motion = m;
+  $('mo-blend').setAttribute('aria-pressed', m === 'blend'); $('mo-pinn').setAttribute('aria-pressed', m === 'pinn');
+  $('mo-note').textContent = m === 'pinn'
+    ? 'A physics-informed network shapes each joint move for the least motor effort within the torque limits. It was trained on the arm\'s equations of motion alone, with no example motions, and takes the same time as the joint blend.'
+    : 'Each joint speeds up and slows down on its own, at its speed and acceleration limits. Torque readouts are % of each motor\'s limit (A1 · A2 · A3).';
+}
+$('mo-blend').addEventListener('click', () => setMotion('blend'));
+$('mo-pinn').addEventListener('click', () => setMotion('pinn'));
+if (!PINN) { $('mo-pinn').disabled = true; $('mo-pinn').title = 'No weights found: run pinn/train.py and pinn/export.py'; }
+setMotion('blend');
 if (!GNN) { $('s-gnn').disabled = true; $('s-gnn').title = 'No weights found: run gnn/train.py and gnn/export.py'; }
 function toggleGrip() { arm.gTgt = (arm.held || arm.gTgt < 0.5) ? 1 : 0; }
 $('grip-f').addEventListener('click', toggleGrip);
@@ -981,6 +1082,12 @@ function tele() {
   $('t-ve').textContent = seen && vis.err != null ? vis.err.toFixed(2) + ' mm' : '–';
   $('t-vt').textContent = seen ? vis.ms.toFixed(1) + ' ms' : '–';
   if (mode === 'vision') $('v-count').textContent = `${prog.cycles} binned · ${vis.missed} missed`;
+  const pct = r => Math.round(Math.abs(r) * 100);
+  $('t-tq').textContent = torque.now ? torque.now.map(pct).join(' · ') + ' %' : '–';
+  $('t-tq').classList.toggle('warn', !!torque.now && torque.now.some(r => Math.abs(r) > 1));
+  const pl = peak.last;
+  $('t-tp').textContent = pl ? `A${pl.j + 1} ${pct(pl.v)} %` : '–';
+  $('t-tp').classList.toggle('warn', !!pl && pl.v > 1);
   const pill = $('pill');
   if (mode === 'program' || mode === 'vision') {
     pill.dataset.s = prog.running ? 'run' : 'pause';
@@ -1002,6 +1109,11 @@ function frame(now) {
     if (mode === 'program' || mode === 'vision') stepProgram(H);
     updateGrip(H); syncHeld(); updateBlocks(H);
     if (mode === 'vision') updateBin();
+    // Torques come from the planned joint motion during joint moves: the GNN's sub-degree corrections,
+    // differentiated twice at 240 Hz, would read as huge accelerations. Each program step starts at rest.
+    const ph = mode === 'program' || mode === 'vision' ? prog.ph : null;
+    if (ph !== torque.ph) { torque.ph = ph; torque.hist = []; }
+    trackTorque(ph && ph.plan ? ph.plan.q : arm.q, H);
     acc -= H; sampleT += H;
     if (sampleT >= 1 / 30) { sampleT -= 1 / 30; hist.push(arm.q.map(q => q / D)); if (hist.length > TRN) hist.shift(); }
   }
