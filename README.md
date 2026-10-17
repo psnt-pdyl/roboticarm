@@ -82,6 +82,68 @@ network's small path correction, squeezed into so little time, would need huge t
 The telemetry shows motor torque as a percentage of each limit, live and as the peak of
 the last joint move.
 
+## Loss functions
+
+All three networks train on data generated on the fly, so every loss is measured
+against something exact. Every term is averaged over the batch.
+
+### IK graph network (`gnn/train.py`)
+
+```
+loss  = angle + w_fk · (0.01 · pos + 0.001 · tool)
+
+angle = ((q̂ − q) / q_half)²             joint-angle error, each joint scaled by half its range
+pos   = (|FK(q̂) − target| / 10 mm)²     where the predicted angles actually put the gripper
+tool  = (tool-angle error in degrees)²
+w_fk  = min(1, step / (0.3 · steps))    0 at the start, full weight after 30 % of training
+```
+
+The angle term teaches the network the joint angles. The forward-kinematics terms
+grade it on where the gripper ends up, which is what matters for gripping. They ramp
+in late because at full weight from the start their errors of hundreds of mm push the
+outputs into wrong poses that training never leaves. The checkpoint kept is the one with
+the lowest mean gripper error, not the lowest loss.
+
+### Vision network (`vision/train.py`)
+
+```
+loss = Huber(p̂ / 10 mm, p / 10 mm)     smooth L1 on the part centre (x, z)
+```
+
+Errors under 10 mm count squared, larger ones only linearly. When the arm hides the
+part the guess can miss by hundreds of mm, and a squared loss lets that one scene
+derail the whole update. Gradients are also clipped to norm 1.
+
+### Motion PINN (`pinn/train.py`)
+
+```
+loss = effort + 1,000 · (torque + floor) + 100,000 · joints
+```
+
+averaged over 512 random moves × 16 random moments per step. The network gives the
+joint angles q(t); autograd differentiates them twice through time for q̇ and q̈, and
+Newton–Euler inverse dynamics turns those into motor torques τ. No term compares
+against example motions.
+
+| Term | Per moment | Weight | Role |
+|---|---|---|---|
+| effort | Σᵢ (τᵢ / τ_max,ᵢ)² over the three motors | 1 | minimised |
+| torque | Σᵢ max(0, \|τᵢ\| / τ_max,ᵢ − 1)² | 1,000 | penalty: motor past its limit |
+| floor | Σ max(0, (20 mm − height) / 100 mm)² over elbow, wrist and tool point | 1,000 | penalty: closer than 20 mm to the floor |
+| joints | Σᵢ max(0, distance into the last 1° before a limit / half the joint's range)² | 100,000 | penalty: joint at or past its limit |
+
+The penalties are zero for any legal motion, so effort is the only thing traded
+off. Joint limits get the stiffest weight because folding the elbow fully lowers the
+gravity load: at 1,000 the network ran up to 2.9° past a limit. The start and end
+of each move are not in the loss; the network's form makes them exact. The checkpoint
+kept has the lowest validation loss.
+
+Final validation values: the first PINN (payloads 0–1 kg) reaches 0.1806, of which
+0.1798 is effort (the joint blend's effort is 0.2433), so the limits are almost never
+touched. The retrained PINN (0–12 kg) reaches 44.90 with effort 0.870 (blend 1.528):
+with heavy payloads overload cannot be avoided, so the penalties make up almost all
+of the loss.
+
 ## Setup
 
 The venv lives on the home drive because this USB drive is exFAT, which can't
