@@ -61,6 +61,9 @@ h1{font-family:var(--f-display);font-weight:700;font-size:clamp(28px,4.2vw,42px)
 .legend span{display:inline-flex;align-items:center;gap:6px}
 .legend i{width:14px;height:3px;border-radius:2px;display:inline-block}
 .trace canvas{width:100%;height:130px;display:block}
+.seg.mini{display:inline-grid}
+.seg.mini button{font-size:13px;padding:6px 10px}
+.legend b{font-weight:500;color:var(--fg);font-variant-numeric:tabular-nums;min-width:5ch;display:inline-block}
 .pendant{background:var(--panel);border:1px solid var(--line);border-radius:6px;display:grid;min-width:0}
 .sec{padding:14px 16px;border-top:1px solid var(--line);display:grid;gap:10px;min-width:0}
 .sec:first-child{border-top:0}
@@ -102,7 +105,7 @@ button:focus-visible,input:focus-visible{outline:2px solid var(--live);outline-o
   <header class="top">
     <div>
       <h1>Planar Arm Cell</h1>
-      <p class="spec">RRR manipulator · L1 360 · L2 300 · tool 120 · reach 780 mm</p>
+      <p class="spec">RRR manipulator · L1 360 · L2 300 · tool 120 · reach 780 mm · <a href="compare.html" style="color:var(--live)">Compare PINN models</a></p>
     </div>
     <span class="pill" id="pill" data-s="run">RUN · AUTO</span>
   </header>
@@ -123,6 +126,17 @@ button:focus-visible,input:focus-visible{outline:2px solid var(--live);outline-o
           </span>
         </header>
         <canvas id="trace"></canvas>
+      </section>
+      <section class="trace" aria-label="Live signal history">
+        <header>
+          <div class="seg mini" role="group" aria-label="Signal to plot">
+            <button id="p-tq" aria-pressed="true">Motor torque</button>
+            <button id="p-qd" aria-pressed="false">Joint speed</button>
+            <button id="p-v" aria-pressed="false">Tool speed</button>
+          </div>
+          <span class="legend" id="p-legend"></span>
+        </header>
+        <canvas id="trace2"></canvas>
       </section>
     </div>
 
@@ -663,8 +677,9 @@ function stepProgram(h) {
       ph.plan = { q: arm.q.slice(), v: arm.v.slice(), tgt };
       // Moves under 0.15 s (a couple of degrees, e.g. re-parking where the arm already is) stay a blend:
       // the network's small path correction, squeezed into so little time, would need huge torques.
-      const T = motion === 'pinn' && PINN ? moveTime(arm.q, tgt) : 0;
-      if (T >= 0.15) ph.pinn = { q0: arm.q.slice(), T, m: arm.held ? PINN.physics.part_mass : 0, t: 0 };
+      // A payload heavier than the network trained on stays a blend too: there its motions are unusable.
+      const T = motion === 'pinn' && PINN ? moveTime(arm.q, tgt) : 0, load = arm.held && PINN ? PINN.physics.part_mass : 0;
+      if (T >= 0.15 && load <= PINN.physics.payload_max) ph.pinn = { q0: arm.q.slice(), T, m: load, t: 0 };
       arm.tgt = arm.q.slice(); arm.v = [0, 0, 0]; peak.cur = { v: 0, j: 0 };
     }
     else if (ln.op === 'LIN') { const t = fk(arm.q).t; ph.x0 = t.x; ph.z0 = t.y; ph.L = Math.hypot(ln.x - t.x, ln.z - t.y); ph.s = 0; ph.v = 0; }
@@ -790,6 +805,7 @@ function setMotion(m) {
   $('mo-blend').setAttribute('aria-pressed', m === 'blend'); $('mo-pinn').setAttribute('aria-pressed', m === 'pinn');
   $('mo-note').textContent = m === 'pinn'
     ? 'A physics-informed network shapes each joint move for the least motor effort within the torque limits. It was trained on the arm\'s equations of motion alone, with no example motions, and takes the same time as the joint blend.'
+      + (PINN.physics.part_mass > PINN.physics.payload_max ? ` It trained on payloads up to ${PINN.physics.payload_max} kg, so moves carrying the ${PINN.physics.part_mass} kg part stay a joint blend.` : '')
     : 'Each joint speeds up and slows down on its own, at its speed and acceleration limits. Torque readouts are % of each motor\'s limit (A1 · A2 · A3).';
 }
 $('mo-blend').addEventListener('click', () => setMotion('blend'));
@@ -812,8 +828,8 @@ document.addEventListener('keydown', e => {
 
 // ---------- canvas ----------
 const cv = $('cell'), cx = cv.getContext('2d');
-const tv = $('trace'), tx = tv.getContext('2d');
-let VW = 0, VH = 0, sc = 1, ox = 0, oy = 0, dpr = 1, TW = 0, TH = 0;
+const tv = $('trace'), tx = tv.getContext('2d'), tv2 = $('trace2'), tx2 = tv2.getContext('2d');
+let VW = 0, VH = 0, sc = 1, ox = 0, oy = 0, dpr = 1, TW = 0, TH = 0, TW2 = 0, TH2 = 0;
 const BOTTOM = 42;
 function fit() {
   dpr = Math.min(2, window.devicePixelRatio || 1);
@@ -823,8 +839,10 @@ function fit() {
   ox = (VW - 1120 * sc) / 2 + 260 * sc; oy = VH - BOTTOM;
   const t = tv.getBoundingClientRect(); TW = t.width; TH = t.height;
   tv.width = Math.round(TW * dpr); tv.height = Math.round(TH * dpr);
+  const t2 = tv2.getBoundingClientRect(); TW2 = t2.width; TH2 = t2.height;
+  tv2.width = Math.round(TW2 * dpr); tv2.height = Math.round(TH2 * dpr);
 }
-new ResizeObserver(fit).observe(cellWrap); new ResizeObserver(fit).observe(tv);
+new ResizeObserver(fit).observe(cellWrap); new ResizeObserver(fit).observe(tv); new ResizeObserver(fit).observe(tv2);
 const S = p => [ox + p.x * sc, oy - p.y * sc];
 
 let C = {};
@@ -1039,6 +1057,73 @@ function drawTrace() {
   });
 }
 
+// live signal history: motor torque, joint speed or tool speed, sampled with the joint trace
+const hist2 = [], JOINTS = [['q1', 'A1 shoulder'], ['q2', 'A2 elbow'], ['q3', 'A3 wrist']];
+const PLOTS = {
+  tq: { get: s => s.tq, series: JOINTS, fmt: v => Math.round(v) + ' %',
+        range: m => { const r = Math.max(150, Math.ceil(m / 50) * 50); return [-r, r, [-100, -50, 0, 50, 100]]; } },
+  qd: { get: s => s.qd, series: JOINTS, fmt: v => Math.round(v) + '°/s',
+        range: m => { const r = Math.max(100, Math.ceil(m / 100) * 100); return [-r, r, [-r, -r / 2, 0, r / 2, r]]; } },
+  v:  { get: s => [s.v], series: [['live', 'Tool point']], fmt: v => Math.round(v) + ' mm/s',
+        range: m => { const r = Math.max(200, Math.ceil(m / 200) * 200); return [0, r, [0, r / 2, r]]; } },
+};
+let plotSel = 'tq', lastSample = null;
+function sampleSignals(h) {
+  const t = fk(arm.q).t;
+  hist2.push({
+    tq: torque.now ? torque.now.map(r => r * 100) : null,
+    qd: lastSample ? arm.q.map((q, i) => (q - lastSample.q[i]) / h / D) : [0, 0, 0],
+    v: lastSample ? Math.hypot(t.x - lastSample.t.x, t.y - lastSample.t.y) / h : 0,
+  });
+  if (hist2.length > TRN) hist2.shift();
+  lastSample = { q: arm.q.slice(), t };
+}
+function setPlot(p) {
+  plotSel = p;
+  Object.keys(PLOTS).forEach(k => $('p-' + k).setAttribute('aria-pressed', k === p));
+  $('p-legend').innerHTML = PLOTS[p].series.map(([col, name], j) =>
+    `<span><i style="background:var(--${col})"></i>${name} <b id="p-val${j}">–</b></span>`).join('');
+}
+Object.keys(PLOTS).forEach(k => $('p-' + k).addEventListener('click', () => setPlot(k)));
+if (!PINN) { $('p-tq').disabled = true; $('p-tq').title = 'Motor torques need pinn-weights.js'; }
+setPlot(PINN ? 'tq' : 'qd');
+function drawSignal() {
+  const c = tx2, P = PLOTS[plotSel]; c.setTransform(dpr, 0, 0, dpr, 0, 0); c.clearRect(0, 0, TW2, TH2);
+  const rows = hist2.map(P.get).filter(Boolean);
+  const m = rows.reduce((a, r) => Math.max(a, ...r.map(Math.abs)), 0);
+  const [lo, hi, ticks] = P.range(m), L = 44, Rp = 6, T = 6, B = 18, pw = TW2 - L - Rp, ph = TH2 - T - B;
+  const y = v => T + (hi - v) / (hi - lo) * ph;
+  c.font = `10px ${MONO}`; c.textAlign = 'right'; c.textBaseline = 'middle';
+  for (const v of ticks) {
+    c.strokeStyle = C.grid; c.lineWidth = 1; c.beginPath(); c.moveTo(L, Math.round(y(v)) + .5); c.lineTo(L + pw, Math.round(y(v)) + .5); c.stroke();
+    c.fillStyle = C.muted; c.fillText((v < 0 ? '−' : '') + Math.abs(v), L - 6, y(v));
+  }
+  if (plotSel === 'tq') {   // each motor's limit
+    c.strokeStyle = C.alert; c.globalAlpha = .7; c.setLineDash([4, 4]);
+    for (const v of [-100, 100]) { c.beginPath(); c.moveTo(L, Math.round(y(v)) + .5); c.lineTo(L + pw, Math.round(y(v)) + .5); c.stroke(); }
+    c.setLineDash([]); c.globalAlpha = 1; c.fillStyle = C.alert; c.textAlign = 'left'; c.textBaseline = 'bottom';
+    c.fillText('limit', L + 4, y(100) - 2);
+  }
+  c.fillStyle = C.muted; c.textBaseline = 'top'; c.textAlign = 'left'; c.fillText('−8 s', L, T + ph + 5); c.textAlign = 'right'; c.fillText('now', L + pw, T + ph + 5);
+  if (!rows.length) return;
+  const off = TRN - hist2.length;
+  P.series.forEach(([col], j) => {
+    c.strokeStyle = C[col]; c.lineWidth = 1.8; c.lineJoin = 'round'; c.beginPath(); let started = false;
+    hist2.forEach((s, i) => {
+      const r = P.get(s); if (!r) { started = false; return; }
+      const X = L + (off + i) / (TRN - 1) * pw, Y = y(clamp(r[j], lo, hi));
+      started ? c.lineTo(X, Y) : c.moveTo(X, Y); started = true;
+    });
+    c.stroke();
+    const last = P.get(hist2[hist2.length - 1]);
+    if (last) { c.fillStyle = C[col]; c.beginPath(); c.arc(L + pw, y(clamp(last[j], lo, hi)), 3, 0, 7); c.fill(); }
+  });
+}
+function signalLegend() {
+  const P = PLOTS[plotSel], last = hist2.length ? P.get(hist2[hist2.length - 1]) : null;
+  P.series.forEach((_, j) => { const el = $('p-val' + j); if (el) el.textContent = last ? P.fmt(last[j]) : '–'; });
+}
+
 // pointer control (follow mode)
 let down = null;
 function setTarget(e) {
@@ -1082,6 +1167,7 @@ function tele() {
   $('t-ve').textContent = seen && vis.err != null ? vis.err.toFixed(2) + ' mm' : '–';
   $('t-vt').textContent = seen ? vis.ms.toFixed(1) + ' ms' : '–';
   if (mode === 'vision') $('v-count').textContent = `${prog.cycles} binned · ${vis.missed} missed`;
+  signalLegend();
   const pct = r => Math.round(Math.abs(r) * 100);
   $('t-tq').textContent = torque.now ? torque.now.map(pct).join(' · ') + ' %' : '–';
   $('t-tq').classList.toggle('warn', !!torque.now && torque.now.some(r => Math.abs(r) > 1));
@@ -1115,13 +1201,16 @@ function frame(now) {
     if (ph !== torque.ph) { torque.ph = ph; torque.hist = []; }
     trackTorque(ph && ph.plan ? ph.plan.q : arm.q, H);
     acc -= H; sampleT += H;
-    if (sampleT >= 1 / 30) { sampleT -= 1 / 30; hist.push(arm.q.map(q => q / D)); if (hist.length > TRN) hist.shift(); }
+    if (sampleT >= 1 / 30) {
+      sampleT -= 1 / 30; hist.push(arm.q.map(q => q / D)); if (hist.length > TRN) hist.shift();
+      sampleSignals(1 / 30);
+    }
   }
   const t = fk(arm.q).t;
   if (lastT && dt > 0) spd += (Math.hypot(t.x - lastT.x, t.y - lastT.y) / dt - spd) * 0.15;
   lastT = t;
   trail.push({ x: t.x, y: t.y, t: now }); while (trail.length && now - trail[0].t > 2500) trail.shift();
-  if (VW) { draw(now); drawTrace(); }
+  if (VW) { draw(now); drawTrace(); drawSignal(); }
   teleAcc += dt; if (teleAcc > 0.1) { teleAcc = 0; tele(); }
   requestAnimationFrame(frame);
 }

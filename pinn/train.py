@@ -21,7 +21,7 @@ from pathlib import Path
 
 import torch
 
-from dynamics import D, FLOOR_CLEAR, JOINT_MARGIN, LIM, TAU_MAX, blend, inverse_dynamics, move_time, points_z, sample_poses
+from dynamics import D, FLOOR_CLEAR, JOINT_MARGIN, LIM, PAYLOAD_MAX, TAU_MAX, blend, inverse_dynamics, move_time, points_z, sample_poses
 from model import Q_HALF, MotionPINN
 
 HERE = Path(__file__).parent
@@ -37,7 +37,7 @@ def sample_moves(n, device, generator=None):
     q0, q1 = sample_poses(n, device, generator), sample_poses(n, device, generator)
     override = torch.exp(math.log(0.5) + r(n) * math.log(4.0))
     T = (move_time(q0, q1) / override).clamp(min=T_MIN)
-    payload = torch.where(r(n) < 0.5, torch.zeros(n, device=device), r(n))
+    payload = torch.where(r(n) < 0.5, torch.zeros(n, device=device), r(n) * PAYLOAD_MAX)
     return q0, q1, T, payload
 
 

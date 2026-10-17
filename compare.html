@@ -1,0 +1,378 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>PINN Payload Comparison</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Barlow:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: three synchronised work cells side by side, each with its torque trace and readouts; one control bar drives all three. */
+:root{
+  --bg:#e3e7eb; --panel:#f4f6f8; --fg:#17202a; --muted:#596775; --line:#c4cdd6; --grid:#d5dce3;
+  --arm:#efb300; --arm-edge:#7a5900; --joint:#28323d; --steel:#a7b2bd; --block-edge:#35424f; --pad:#9aa6b2;
+  --alert:#c93c24; --ok:#2a8755; --live:#1f6bcc; --q1:#1f6bcc; --q2:#c4430e; --q3:#0d877b;
+  --f-display:"Barlow Condensed","Arial Narrow",sans-serif; --f-body:"Barlow",system-ui,sans-serif; --f-mono:"JetBrains Mono",ui-monospace,Menlo,monospace;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#0f141a; --panel:#171e26; --fg:#e4e9ef; --muted:#8c99a7; --line:#2a3541; --grid:#222c37;
+  --arm:#f4bf27; --arm-edge:#8f6a00; --joint:#4a5868; --steel:#7f8c99; --block-edge:#2a3542; --pad:#5a6877;
+  --alert:#f0674c; --ok:#4cc187; --live:#5d9ef2; --q1:#5d9ef2; --q2:#f07d42; --q3:#33c3b3; color-scheme:dark;
+}}
+:root[data-theme="dark"]{
+  --bg:#0f141a; --panel:#171e26; --fg:#e4e9ef; --muted:#8c99a7; --line:#2a3541; --grid:#222c37;
+  --arm:#f4bf27; --arm-edge:#8f6a00; --joint:#4a5868; --steel:#7f8c99; --block-edge:#2a3542; --pad:#5a6877;
+  --alert:#f0674c; --ok:#4cc187; --live:#5d9ef2; --q1:#5d9ef2; --q2:#f07d42; --q3:#33c3b3; color-scheme:dark;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.45 var(--f-body);
+  padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:20px 32px}
+.wrap{max-width:1500px;margin:0 auto;display:grid;gap:16px}
+.top{display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:12px}
+h1{font:700 clamp(28px,4vw,40px)/1 var(--f-display);margin:0;text-transform:uppercase;letter-spacing:.01em;text-wrap:balance}
+.spec{font:12px var(--f-mono);color:var(--muted);margin:6px 0 0;max-width:80ch}
+a{color:var(--live)}
+.bar{display:flex;flex-wrap:wrap;gap:12px 24px;align-items:center;background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:12px 16px}
+.btn{font:600 14px/1 var(--f-display);letter-spacing:.08em;text-transform:uppercase;padding:9px 14px;border-radius:4px;border:1px solid var(--line);background:var(--bg);color:var(--fg);cursor:pointer}
+.btn.primary{background:var(--arm);border-color:var(--arm-edge);color:#1b1500}
+.ctl{display:grid;gap:4px;min-width:200px;flex:1}
+.ctl .tl{display:flex;justify-content:space-between;font-size:14px}
+.ctl output{font:13px var(--f-mono);font-variant-numeric:tabular-nums}
+input[type=range]{width:100%;accent-color:var(--fg);margin:0}
+.clock{font:13px var(--f-mono);color:var(--muted);font-variant-numeric:tabular-nums}
+.grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px}
+@media (max-width:1100px){.grid{grid-template-columns:minmax(0,1fr)}}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:6px;display:grid;min-width:0}
+.card header{padding:12px 14px 8px;display:grid;gap:2px}
+.card h2{font:700 20px/1.1 var(--f-display);text-transform:uppercase;letter-spacing:.02em;margin:0}
+.sub{font:12px var(--f-mono);color:var(--muted)}
+.cell{width:100%;aspect-ratio:1/1;max-width:100%;max-height:min(62vh,520px);display:block;border-top:1px solid var(--line);border-bottom:1px solid var(--line)}
+.trace{width:100%;height:120px;display:block}
+.label{font:600 12px/1.2 var(--f-display);letter-spacing:.12em;text-transform:uppercase;color:var(--muted);padding:10px 14px 0}
+dl{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px 12px;margin:0;padding:10px 14px 14px;border-top:1px solid var(--line)}
+dl div{display:grid;gap:1px;min-width:0}
+dt{font:600 11px/1.2 var(--f-display);letter-spacing:.12em;text-transform:uppercase;color:var(--muted)}
+dd{margin:0;font:14px var(--f-mono);font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+dd.warn{color:var(--alert)}
+.legend{display:flex;flex-wrap:wrap;gap:12px;font:12px var(--f-mono);color:var(--muted);padding:0 14px}
+.legend i{width:14px;height:3px;border-radius:2px;display:inline-block;margin-right:6px;vertical-align:middle}
+button:focus-visible,input:focus-visible,a:focus-visible{outline:2px solid var(--live);outline-offset:2px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div>
+      <h1>PINN payload comparison</h1>
+      <p class="spec">Same pick-and-bin cycle, run in step by three motion networks. The arm's motors are rated 80 · 30 · 6 N·m; torque is shown as % of each motor's limit. Joint moves follow the PINN; the straight moves down to the part and back up are the same in all three. <a href="index.html">Back to the work cell</a></p>
+    </div>
+  </header>
+
+  <div class="bar">
+    <button class="btn primary" id="play">Pause</button>
+    <button class="btn" id="restart">Restart cycle</button>
+    <div class="ctl"><div class="tl"><label for="px">Part position</label><output id="px-o">X 450 mm</output></div>
+      <input type="range" id="px" min="180" max="590" step="10" value="450"></div>
+    <div class="ctl"><div class="tl"><label for="ov">Speed</label><output id="ov-o">100 %</output></div>
+      <input type="range" id="ov" min="50" max="200" step="10" value="100"></div>
+    <span class="clock" id="clock">–</span>
+  </div>
+
+  <div class="grid" id="grid"></div>
+  <p class="spec" id="missing" hidden>Weights not found. Serve the folder (python -m http.server 8765) and open http://localhost:8765/compare.html; pinn-1kg-weights.js and pinn-weights.js must sit next to this page.</p>
+</div>
+
+<script src="pinn-1kg-weights.js"></script>
+<script src="pinn-weights.js"></script>
+<script>
+(() => {
+const D = Math.PI / 180, L1 = 360, L2 = 300, L3 = 120, SH = { x: 0, y: 160 }, BS = 60;
+const LIM = [[-20, 200], [-160, 160], [-140, 140]].map(r => r.map(v => v * D));
+const VMAX = [110, 130, 200].map(v => v * D), AMAX = [320, 380, 600].map(v => v * D);
+const BIN = { x: -185, w: 120, h: 130 }, PARK = { x: -185, z: 300 }, SAFE = 270, PICK = BS / 2, PHI = -90 * D;
+const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
+const wrapPi = a => Math.atan2(Math.sin(a), Math.cos(a));
+const $ = id => document.getElementById(id);
+
+const W1 = window.MOTION_PINN_1KG, W12 = window.MOTION_PINN;
+if (!W1 || !W12) { $('missing').hidden = false; return; }
+const PHYS = W12.physics;
+
+// ---------- the networks (same forward pass as pinn/model.py) ----------
+function decode(tensors) {
+  const T = {};
+  for (const [k, v] of Object.entries(tensors)) {
+    const bin = atob(v.b64), buf = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) buf[i] = bin.charCodeAt(i);
+    T[k] = { s: v.shape, d: new Float32Array(buf.buffer) };
+  }
+  return T;
+}
+function makePinn(W) {
+  const T = decode(W.tensors), qm = T.q_mid.d, qh = T.q_half.d;
+  const lin = (name, x) => {
+    const w = T[name + '.weight'], b = T[name + '.bias'], [o, n] = w.s, out = new Float32Array(o);
+    for (let i = 0; i < o; i++) { let s = b.d[i]; const r = i * n; for (let j = 0; j < n; j++) s += w.d[r + j] * x[j]; out[i] = s; }
+    return out;
+  };
+  return (q0, q1, s, Tm, payload) => {
+    let x = [0, 1, 2].map(i => (q0[i] - qm[i]) / qh[i]).concat([0, 1, 2].map(i => (q1[i] - q0[i]) / qh[i]),
+      [2 * s - 1, Math.log(Tm / W.physics.t_ref), payload]);
+    for (let l = 0; l < W.layers; l++) { x = lin(`layers.${l}`, x); for (let i = 0; i < x.length; i++) x[i] = x[i] / (1 + Math.exp(-x[i])); }
+    const N = lin('out', x), b = 10 * s ** 3 - 15 * s ** 4 + 6 * s ** 5, w = 64 * s ** 3 * (1 - s) ** 3;
+    return [0, 1, 2].map(i => q0[i] + (q1[i] - q0[i]) * b + w * N[i]);
+  };
+}
+
+// ---------- kinematics and dynamics ----------
+function fk(q) {
+  const a1 = q[0], a2 = a1 + q[1], a3 = a2 + q[2];
+  const e = { x: SH.x + L1 * Math.cos(a1), y: SH.y + L1 * Math.sin(a1) };
+  const w = { x: e.x + L2 * Math.cos(a2), y: e.y + L2 * Math.sin(a2) };
+  const t = { x: w.x + L3 * Math.cos(a3), y: w.y + L3 * Math.sin(a3) };
+  return { s: SH, e, w, t, a3 };
+}
+function ik(tx, ty, phi, elbow) {
+  const wx = tx - L3 * Math.cos(phi) - SH.x, wy = ty - L3 * Math.sin(phi) - SH.y;
+  const c = (wx * wx + wy * wy - L1 * L1 - L2 * L2) / (2 * L1 * L2), q2 = elbow * Math.acos(clamp(c, -1, 1));
+  let q1 = wrapPi(Math.atan2(wy, wx) - Math.atan2(L2 * Math.sin(q2), L1 + L2 * Math.cos(q2)));
+  if (q1 < -90 * D) q1 += 2 * Math.PI;
+  return [q1, q2, wrapPi(phi - q1 - q2)];
+}
+// planar Newton-Euler, the same equations as inverse_dynamics() in pinn/dynamics.py
+function motorTorques(q, qd, qdd, payload) {
+  const { len: Ln, mass: m, com: c, inertia: In, g } = PHYS;
+  let a = 0, ad = 0, add = 0; const u = [], rel = [], acc = [];
+  for (let k = 0; k < 3; k++) {
+    a += q[k]; ad += qd[k]; add += qdd[k]; acc.push(add);
+    const cs = Math.cos(a), sn = Math.sin(a);
+    u.push([cs, sn]); rel.push([-add * sn - ad * ad * cs, add * cs - ad * ad * sn]);
+  }
+  const p = [[0, 0]];
+  for (let k = 0; k < 3; k++) p.push([p[k][0] + Ln[k] * rel[k][0], p[k][1] + Ln[k] * rel[k][1]]);
+  let F = [payload * p[3][0], payload * (p[3][1] + g)], tn = 0;
+  const tau = [0, 0, 0], cross = (r, f) => r[0] * f[1] - r[1] * f[0];
+  for (let k = 2; k >= 0; k--) {
+    const Fk = [m[k] * (p[k][0] + c[k] * rel[k][0]) + F[0], m[k] * (p[k][1] + c[k] * rel[k][1] + g) + F[1]];
+    tau[k] = In[k] * acc[k] + tn + c[k] * cross(u[k], Fk) + (Ln[k] - c[k]) * cross(u[k], F);
+    F = Fk; tn = tau[k];
+  }
+  return tau.map((t, i) => t / PHYS.tau_max[i]);
+}
+function moveTime(q0, q1, ov) {
+  let T = 0;
+  for (let i = 0; i < 3; i++) {
+    const v = VMAX[i] * ov, a = AMAX[i] * ov, d = Math.abs(q1[i] - q0[i]);
+    T = Math.max(T, d >= v * v / a ? d / v + v / a : 2 * Math.sqrt(d / a));
+  }
+  return Math.max(T, PHYS.t_min);
+}
+
+// ---------- the shared cycle: every phase lasts the same in all three cells ----------
+let cycle = null, partX = 450, speed = 1;
+function buildCycle() {
+  const qPark = ik(PARK.x, PARK.z, PHI, 1), qAbove = ik(partX, SAFE, PHI, -1), qPick = ik(partX, PICK, PHI, -1);
+  const linT = v => 1.875 * (SAFE - PICK) / (v * speed);   // quintic profile peaking at speed v
+  const phases = [
+    { kind: 'ptp', name: 'Park → above part', q0: qPark, q1: qAbove, T: moveTime(qPark, qAbove, speed), carry: false },
+    { kind: 'lin', name: 'Down to the part', z0: SAFE, z1: PICK, T: linT(250), carry: false },
+    { kind: 'wait', name: 'Grip', q: qPick, T: 0.4, grip: [1, 0], carry: false },
+    { kind: 'lin', name: 'Lift', z0: PICK, z1: SAFE, T: linT(400), carry: true },
+    { kind: 'ptp', name: 'Carry to the bin', q0: qAbove, q1: qPark, T: moveTime(qAbove, qPark, speed), carry: true, key: true },
+    { kind: 'wait', name: 'Drop', q: qPark, T: 0.5, grip: [0, 1], carry: false, drop: true },
+  ];
+  let t0 = 0; for (const p of phases) { p.t0 = t0; t0 += p.T; }
+  cycle = { phases, T: t0 };
+}
+function phaseAt(t) {
+  t = clamp(t, 0, cycle.T - 1e-9);
+  const p = cycle.phases.find(p => t < p.t0 + p.T) || cycle.phases[cycle.phases.length - 1];
+  return { p, s: clamp((t - p.t0) / p.T, 0, 1) };
+}
+const quintic = s => 10 * s ** 3 - 15 * s ** 4 + 6 * s ** 5;
+
+// ---------- the three cells ----------
+const CELLS = [
+  { title: 'First PINN · 0.4 kg', sub: 'trained on 0–1 kg payloads · original part', net: makePinn(W1), mass: 0.4 },
+  { title: 'First PINN · 10 kg', sub: 'trained on 0–1 kg payloads · 10 kg part, never seen', net: makePinn(W1), mass: 10 },
+  { title: 'Retrained PINN · 10 kg', sub: 'trained on 0–12 kg payloads · 10 kg part', net: makePinn(W12), mass: 10 },
+];
+const grid = $('grid');
+CELLS.forEach((c, i) => {
+  const el = document.createElement('section'); el.className = 'card'; el.setAttribute('aria-label', c.title);
+  el.innerHTML = `<header><h2>${c.title}</h2><span class="sub">${c.sub}</span></header>
+    <canvas class="cell" aria-label="Arm animation: ${c.title}"></canvas>
+    <div class="label">Motor torque · last 8 s · % of limit</div>
+    <div class="legend"><span><i style="background:var(--q1)"></i>A1 shoulder</span><span><i style="background:var(--q2)"></i>A2 elbow</span><span><i style="background:var(--q3)"></i>A3 wrist</span></div>
+    <canvas class="trace" aria-label="Motor torque history: ${c.title}"></canvas>
+    <dl>
+      <div><dt>Torque now</dt><dd data-k="now">–</dd></div>
+      <div><dt>Carry peak</dt><dd data-k="peak">–</dd></div>
+      <div><dt>Carry effort</dt><dd data-k="effort">–</dd></div>
+      <div><dt>Phase</dt><dd data-k="phase">–</dd></div>
+      <div><dt>Past joint limit</dt><dd data-k="joint">–</dd></div>
+      <div><dt>Lowest point</dt><dd data-k="floor">–</dd></div>
+    </dl>`;
+  grid.appendChild(el);
+  Object.assign(c, { el, cv: el.querySelector('.cell'), tv: el.querySelector('.trace'), hist: [], q: null, r: [0, 0, 0],
+    carry: { peak: 0, j: 0, eff: 0, n: 0, over: 0, low: Infinity }, last: null, dd: k => el.querySelector(`[data-k="${k}"]`) });
+});
+
+function poseAt(c, t) {
+  const { p, s } = phaseAt(t);
+  if (p.kind === 'ptp') return c.net(p.q0, p.q1, s, p.T, p.carry ? c.mass : 0);
+  if (p.kind === 'lin') return ik(partX, p.z0 + (p.z1 - p.z0) * quintic(s), PHI, -1);
+  return p.q;
+}
+
+// ---------- drawing ----------
+let C = {};
+function readTokens() {
+  const cs = getComputedStyle(document.documentElement);
+  ['panel', 'fg', 'muted', 'line', 'grid', 'arm', 'arm-edge', 'joint', 'steel', 'block-edge', 'pad', 'alert', 'live', 'q1', 'q2', 'q3']
+    .forEach(n => C[n] = cs.getPropertyValue('--' + n).trim());
+}
+readTokens();
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change', readTokens);
+new MutationObserver(readTokens).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+const MONO = '"JetBrains Mono", ui-monospace, monospace';
+function size(cv) {
+  const dpr = Math.min(2, window.devicePixelRatio || 1), r = cv.getBoundingClientRect();
+  if (cv.width !== Math.round(r.width * dpr) || cv.height !== Math.round(r.height * dpr)) { cv.width = Math.round(r.width * dpr); cv.height = Math.round(r.height * dpr); }
+  return { w: r.width, h: r.height, dpr };
+}
+function drawCell(c, t) {
+  const { w, h, dpr } = size(c.cv), x = c.cv.getContext('2d');
+  if (w < 40 || h < 80) return;   // not laid out yet
+  x.setTransform(dpr, 0, 0, dpr, 0, 0); x.fillStyle = C.panel; x.fillRect(0, 0, w, h);
+  const sc = Math.min(w / 1080, (h - 30) / 1000), ox = w / 2 - 190 * sc, oy = h - 26;
+  const S = p => [ox + p.x * sc, oy - p.y * sc];
+  x.strokeStyle = C.grid; x.lineWidth = 1;
+  for (let gx = -300; gx <= 700; gx += 100) { const [X] = S({ x: gx, y: 0 }); x.beginPath(); x.moveTo(X + .5, 0); x.lineTo(X + .5, oy); x.stroke(); }
+  for (let gz = 100; oy - gz * sc > 0; gz += 100) { const [, Y] = S({ x: 0, y: gz }); x.beginPath(); x.moveTo(0, Y + .5); x.lineTo(w, Y + .5); x.stroke(); }
+  x.strokeStyle = C.fg; x.lineWidth = 1.5; x.beginPath(); x.moveTo(0, oy); x.lineTo(w, oy); x.stroke();
+  // base and bin
+  x.fillStyle = C.joint; x.beginPath(); [[-80, 0], [80, 0], [52, SH.y - 30], [-52, SH.y - 30]].map(([a, b]) => S({ x: a, y: b })).forEach(([X, Y], i) => i ? x.lineTo(X, Y) : x.moveTo(X, Y)); x.fill();
+  const hw = BIN.w / 2; x.beginPath(); [[-hw + 8, 0], [hw - 8, 0], [hw, BIN.h], [-hw, BIN.h]].map(([a, b]) => S({ x: BIN.x + a, y: b })).forEach(([X, Y], i) => i ? x.lineTo(X, Y) : x.moveTo(X, Y));
+  x.closePath(); x.fillStyle = C.steel; x.fill(); x.strokeStyle = C.joint; x.lineWidth = 1.2; x.stroke();
+  // part
+  const { p, s } = phaseAt(t), k = fk(c.q);
+  let part = { x: partX, y: PICK, ang: 0, show: true };
+  if (p.carry) part = { x: k.t.x, y: k.t.y, ang: k.a3 + 90 * D, show: true };
+  else if (p.drop) { const f = s * s; part = { x: k.t.x + (BIN.x - k.t.x) * f, y: k.t.y + (BS / 2 + 10 - k.t.y) * f, ang: 0, show: s < 0.95 }; }
+  if (part.show) {
+    const [X, Y] = S(part), q = BS * sc * (c.mass >= 5 ? 1.25 : 1);
+    x.save(); x.translate(X, Y); x.rotate(-part.ang);
+    x.fillStyle = c.mass >= 5 ? '#5b4636' : '#2e7d32'; x.fillRect(-q / 2, -q / 2, q, q);
+    x.strokeStyle = C['block-edge']; x.lineWidth = 1; x.strokeRect(-q / 2, -q / 2, q, q);
+    x.fillStyle = '#ffffff'; x.font = `500 ${Math.max(8, Math.round(17 * sc))}px ${MONO}`; x.textAlign = 'center'; x.textBaseline = 'middle';
+    x.fillText(`${c.mass} kg`, 0, 1); x.restore();
+  }
+  // arm: link strokes, then joints ringed red when that motor is over its limit or the joint is past its stop
+  const bad = j => Math.abs(c.r[j]) > 1 || c.q[j] < LIM[j][0] || c.q[j] > LIM[j][1];
+  const link = (a, b, wmm) => {
+    x.lineCap = 'round'; x.strokeStyle = C['arm-edge']; x.lineWidth = wmm * sc + 2; x.beginPath(); x.moveTo(...S(a)); x.lineTo(...S(b)); x.stroke();
+    x.strokeStyle = C.arm; x.lineWidth = wmm * sc; x.stroke();
+  };
+  link(k.s, k.e, 62); link(k.e, k.w, 44);
+  const u = { x: Math.cos(k.a3), y: Math.sin(k.a3) }, n = { x: -u.y, y: u.x };
+  const g = p.grip ? p.grip[0] + (p.grip[1] - p.grip[0]) * s : (p.carry ? 0 : 1), half = 12 + 43 * g;
+  const P = (a, b) => ({ x: k.w.x + u.x * a + n.x * b, y: k.w.y + u.y * a + n.y * b });
+  x.lineCap = 'round'; x.strokeStyle = C.joint; x.lineWidth = 26 * sc; x.beginPath(); x.moveTo(...S(k.w)); x.lineTo(...S(P(L3 - 68, 0))); x.stroke();
+  x.lineWidth = 20 * sc; x.beginPath(); x.moveTo(...S(P(L3 - 62, -64))); x.lineTo(...S(P(L3 - 62, 64))); x.stroke();
+  x.strokeStyle = C.steel; x.lineWidth = 12 * sc;
+  for (const sg of [-1, 1]) { x.beginPath(); x.moveTo(...S(P(L3 - 50, sg * (half + 6)))); x.lineTo(...S(P(L3 + 12, sg * (half + 6)))); x.stroke(); }
+  [[k.s, 44, 0], [k.e, 31, 1], [k.w, 21, 2]].forEach(([pt, r, j]) => {
+    const [X, Y] = S(pt); x.fillStyle = C.joint; x.beginPath(); x.arc(X, Y, r * sc, 0, 7); x.fill();
+    x.strokeStyle = bad(j) ? C.alert : C.arm; x.lineWidth = bad(j) ? 3 : 1.5; x.beginPath(); x.arc(X, Y, (r - 8) * sc + (bad(j) ? 3 : 0), 0, 7); x.stroke();
+  });
+  // floor collision cue
+  const low = Math.min(k.e.y, k.w.y, k.t.y);
+  if (low < 0) { x.fillStyle = C.alert; x.font = `500 12px ${MONO}`; x.textAlign = 'left'; x.textBaseline = 'top'; x.fillText(`into the floor ${Math.round(-low)} mm`, 8, 8); }
+}
+function drawTrace(c) {
+  const { w, h, dpr } = size(c.tv), x = c.tv.getContext('2d');
+  if (w < 60 || h < 40) return;
+  x.setTransform(dpr, 0, 0, dpr, 0, 0); x.clearRect(0, 0, w, h);
+  const m = c.hist.reduce((a, r) => Math.max(a, ...r.map(Math.abs)), 0), hi = Math.max(150, Math.ceil(m / 100) * 100);
+  const Lm = 40, T = 6, B = 16, pw = w - Lm - 8, ph = h - T - B, y = v => T + (hi - v) / (2 * hi) * ph;
+  x.font = `10px ${MONO}`; x.textAlign = 'right'; x.textBaseline = 'middle';
+  for (const v of [-hi, -100, 0, 100, hi]) {
+    x.strokeStyle = Math.abs(v) === 100 ? C.alert : C.grid; x.globalAlpha = Math.abs(v) === 100 ? .7 : 1;
+    x.setLineDash(Math.abs(v) === 100 ? [4, 4] : []); x.beginPath(); x.moveTo(Lm, Math.round(y(v)) + .5); x.lineTo(Lm + pw, Math.round(y(v)) + .5); x.stroke();
+    x.setLineDash([]); x.globalAlpha = 1; x.fillStyle = Math.abs(v) === 100 ? C.alert : C.muted; x.fillText((v < 0 ? '−' : '') + Math.abs(v), Lm - 6, y(v));
+  }
+  x.fillStyle = C.muted; x.textBaseline = 'top'; x.textAlign = 'left'; x.fillText('−8 s', Lm, T + ph + 3); x.textAlign = 'right'; x.fillText('now', Lm + pw, T + ph + 3);
+  const off = TRN - c.hist.length;
+  ['q1', 'q2', 'q3'].forEach((key, j) => {
+    x.strokeStyle = C[key]; x.lineWidth = 1.6; x.lineJoin = 'round'; x.beginPath();
+    c.hist.forEach((r, i) => { const X = Lm + (off + i) / (TRN - 1) * pw, Y = y(clamp(r[j], -hi, hi)); i ? x.lineTo(X, Y) : x.moveTo(X, Y); });
+    x.stroke();
+  });
+}
+
+// ---------- loop ----------
+const TRN = 240, H = 1 / 240;
+let t = 0, playing = !matchMedia('(prefers-reduced-motion: reduce)').matches, sampleT = 0, pending = false, last = performance.now(), prev = null;
+// Once per frame: advance the shared clock, then each cell's pose and motor torques
+// (central differences over ±1/240 s of its planned motion).
+function update(dt) {
+  t += dt;
+  if (t >= cycle.T) { t -= cycle.T; if (pending) { buildCycle(); pending = false; t = 0; } }
+  const { p } = phaseAt(t);
+  for (const c of CELLS) {
+    const qa = poseAt(c, t - H), qb = poseAt(c, t), qc = poseAt(c, t + H);
+    c.q = qb;
+    const qd = qb.map((_, i) => (qc[i] - qa[i]) / (2 * H)), qdd = qb.map((v, i) => (qc[i] - 2 * v + qa[i]) / (H * H));
+    c.r = motorTorques(qb, qd, qdd, p.carry ? c.mass : 0);
+    if (p.key) {
+      if (prev !== p) c.carry = { peak: 0, j: 0, eff: 0, n: 0, over: 0, low: Infinity };
+      const cr = c.carry, k = fk(qb);
+      c.r.forEach((r, j) => { if (Math.abs(r) > cr.peak) { cr.peak = Math.abs(r); cr.j = j; } });
+      cr.eff += c.r.reduce((a, r) => a + r * r, 0); cr.n++;
+      cr.over = Math.max(cr.over, ...qb.map((q, j) => Math.max(0, q - LIM[j][1], LIM[j][0] - q) / D));
+      cr.low = Math.min(cr.low, k.e.y, k.w.y, k.t.y);
+    } else if (prev && prev.key && prev !== p) c.last = { ...c.carry };
+  }
+  prev = p;
+  sampleT += dt;
+  if (sampleT >= 1 / 30) { sampleT = 0; for (const c of CELLS) { c.hist.push(c.r.map(r => r * 100)); if (c.hist.length > TRN) c.hist.shift(); } }
+}
+function readouts() {
+  const { p } = phaseAt(t);
+  $('clock').textContent = `${p.name} · ${t.toFixed(1)} / ${cycle.T.toFixed(1)} s`;
+  for (const c of CELLS) {
+    const pct = r => Math.round(Math.abs(r) * 100), cr = c.last || c.carry;
+    c.dd('now').textContent = c.r.map(pct).join(' · ') + ' %'; c.dd('now').classList.toggle('warn', c.r.some(r => Math.abs(r) > 1));
+    const have = cr && cr.n;
+    c.dd('peak').textContent = have ? `A${cr.j + 1} ${pct(cr.peak)} %` : '–'; c.dd('peak').classList.toggle('warn', have && cr.peak > 1);
+    c.dd('effort').textContent = have ? (cr.eff / cr.n).toFixed(2) : '–';
+    c.dd('phase').textContent = p.name;
+    c.dd('joint').textContent = have ? (cr.over > 0.01 ? `${cr.over.toFixed(1)}°` : 'no') : '–'; c.dd('joint').classList.toggle('warn', have && cr.over > 0.01);
+    c.dd('floor').textContent = have ? `${Math.round(cr.low)} mm` : '–'; c.dd('floor').classList.toggle('warn', have && cr.low < 0);
+  }
+}
+let teleAcc = 0;
+function frame(now) {
+  const dt = Math.min(0.05, (now - last) / 1000); last = now;
+  if (playing) update(dt);
+  for (const c of CELLS) { drawCell(c, t); drawTrace(c); }
+  teleAcc += dt; if (teleAcc > 0.1) { teleAcc = 0; readouts(); }
+  requestAnimationFrame(frame);
+}
+
+// ---------- controls ----------
+$('play').addEventListener('click', () => { playing = !playing; $('play').textContent = playing ? 'Pause' : 'Play'; });
+$('restart').addEventListener('click', () => { buildCycle(); t = 0; pending = false; prev = null; for (const c of CELLS) { c.hist = []; c.last = null; } });
+$('px').addEventListener('input', e => { partX = +e.target.value; $('px-o').textContent = `X ${partX} mm`; pending = true; });
+$('ov').addEventListener('input', e => { speed = e.target.value / 100; $('ov-o').textContent = `${e.target.value} %`; pending = true; });
+$('play').textContent = playing ? 'Pause' : 'Play';
+buildCycle();
+update(0);
+readouts();
+requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

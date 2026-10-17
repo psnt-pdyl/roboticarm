@@ -19,7 +19,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import torch
 
-from dynamics import TAU_MAX, PART_MASS, blend, inverse_dynamics, move_time
+from dynamics import TAU_MAX, PART_MASS, PAYLOAD_MAX, blend, inverse_dynamics, move_time
 from model import MotionPINN, compose
 from train import evaluate, evaluate_blend, penalty, physics_terms, reduce, sample_moves
 
@@ -170,7 +170,7 @@ def main():
     (HERE / "eval.json").write_text(json.dumps(report, indent=2))
 
     r = report["random_moves"]
-    print("1000 random unseen moves (50-200 % speed, 0-1 kg payload):")
+    print(f"1000 random unseen moves (50-200 % speed, 0-{PAYLOAD_MAX:g} kg payload):")
     print(f"  {'':18s}{'effort':>9s}{'vs blend':>10s}{'peak torque':>13s}{'over torque lim':>17s}"
           f"{'past joint limit':>24s}{'into the floor':>24s}")
     for key, label in (("joint_blend", "joint blend"), ("pinn", "PINN"), ("per_move_optimum", "per-move optimum")):

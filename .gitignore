@@ -8,3 +8,4 @@ gnn/ik_gnn.pt
 gnn/train.log
 vision/vision_net.pt
 pinn/pinn.pt
+pinn/model_*/pinn.pt

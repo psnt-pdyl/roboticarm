@@ -64,7 +64,7 @@ derail training.
 
 `pinn/` trains a physics-informed network that shapes the arm's joint moves. The page's
 arm has no masses of its own, so `pinn/dynamics.py` gives it a body (links of 6, 4 and
-1.5 kg, motor limits of 80, 30 and 6 N·m, a 0.4 kg part) and computes motor torques
+1.5 kg, motor limits of 80, 30 and 6 N·m, a 10 kg part) and computes motor torques
 with Newton–Euler equations, checked against a Lagrangian derivation.
 
 The network takes a start pose, an end pose, the move's duration, the payload and a
@@ -120,6 +120,10 @@ cd pinn
 python train.py --device cuda   # writes pinn.pt, train_history.json
 python evaluate.py              # writes eval.json, example_move.png (compares blend, PINN, per-move optimum)
 python export.py                # writes ../pinn-weights.js
+
+# the two kept models, as used by compare.html
+python export.py --model model_12kg --payload-max 12
+python export.py --model model_1kg --payload-max 1 --out ../pinn-1kg-weights.js --name MOTION_PINN_1KG
 ```
 
 Training runs on the CPU by default. The first CUDA calculation on this laptop's
@@ -152,7 +156,10 @@ disk, some browsers block the scripts. From the project folder:
 | `vision/train.py` | Training loop |
 | `vision/evaluate.py` | Position error on unseen scenes, and share close enough to grip |
 | `vision/export.py` | Weight and camera export for the web page |
-| `pinn-weights.js` | Exported motion PINN and the arm's physics constants (generated) |
+| `compare.html` | Three synchronised cells: first PINN with the 0.4 kg part, first PINN with 10 kg, retrained PINN with 10 kg |
+| `pinn-weights.js` | Exported retrained PINN (0–12 kg) and the arm's physics constants (generated) |
+| `pinn-1kg-weights.js` | Exported first PINN (0–1 kg), for `compare.html` (generated) |
+| `pinn/model_1kg/`, `pinn/model_12kg/` | Each kept model's results: `eval.json`, `train_history.json`, `example_move.png` (and its checkpoint, not in git) |
 | `pinn/dynamics.py` | Masses, torque limits, Newton–Euler inverse dynamics, the page's joint blend |
 | `pinn/model.py` | The motion PINN: q(t) with exact start and end, derivatives by autograd |
 | `pinn/train.py` | Physics-only training loop and loss |
@@ -178,6 +185,30 @@ single network is 21 % above the optimum, and it answers 1,000 moves in 0.3 s wh
 optimisation takes about 90 s. On the page's own moves at 100 % speed it saves 18–43 %;
 on very short, fast moves (0.4 s) it uses more effort than the blend, because it starts
 and stops without a torque jump.
+
+The part weighs 10 kg, more than these motors can carry: just holding it still above
+the bin needs 127 % of the elbow's limit, and at the far pick spot 118 % of the
+shoulder's and 114 % of the elbow's. The sim does not enforce motor limits, so the arm
+still moves; the torque readouts and chart show the overload in red.
+
+The PINN is trained on payloads from 0 to 12 kg. No motion can keep 10 kg within these
+motors' limits, so it learns the motion that overloads them least: carrying the part
+to the bin it peaks at 157–180 % of the elbow's limit, against 255–285 % for the blend,
+with about 55 % less effort. On 1,000 random moves with 0–12 kg it uses 45 % less effort
+than the blend. Two costs come with the heavy range. On light moves it is weaker than
+the earlier model trained on 0–1 kg (kept in `pinn/backup_1kg/`): empty moves save only
+2 % effort instead of 40 %, and at 200 % speed it can use more than the blend. And where
+a heavy payload makes overload unavoidable, the loss trades it against the joint limits:
+10.8 % of random moves pass a joint limit, by up to 11° (the per-move optimum does the
+same on 9.5 %, up to 10°). The page's own moves stay inside the joint limits and at least
+42 mm above the floor.
+
+Both models are kept (`pinn/model_1kg/`, `pinn/model_12kg/`), and `compare.html` runs
+them side by side on the same pick-and-bin cycle, in step: the first PINN with the
+original 0.4 kg part, the first PINN with the 10 kg part, and the retrained PINN with the
+10 kg part, each with its own torque trace, the carry move's peak torque and effort,
+joint-limit and floor checks. With the part at X 450 at 100 % speed, the carry move
+peaks at 67 %, about 600 % and 160 % of a motor's limit respectively.
 
 The 2D vision network, on 10,000 unseen scenes: position error 0.28 mm mean, 0.70 mm
 p95, 10.4 mm max; every part found close enough to grip (the gripper catches a part
